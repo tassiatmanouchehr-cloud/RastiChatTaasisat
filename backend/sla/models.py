@@ -45,6 +45,10 @@ class WorkingInterval(models.Model):
 class Holiday(models.Model):
     """A calendar-date exception: either a closure (holiday) or, for a day
     that would otherwise be non-working, an exceptional working day.
+
+    When `is_working` is True, `start_time`/`end_time` give that day its own
+    one-off hours (e.g. a special Saturday shift); if left blank, the day
+    falls back to whatever its normal weekday WorkingInterval would be.
     """
     calendar = models.ForeignKey(BusinessCalendar, on_delete=models.CASCADE, related_name='holidays')
     date = models.DateField()
@@ -52,6 +56,8 @@ class Holiday(models.Model):
     is_working = models.BooleanField(
         default=False, help_text='True = exceptional working day; False = closure/holiday.',
     )
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ('calendar', 'date')

@@ -38,15 +38,20 @@ def select_policy(conversation):
 
 def _working_windows_for_date(calendar, date_):
     """Return a list of (start_datetime, end_datetime) tz-aware windows, in
-    the calendar's own timezone, for the given calendar date. Holidays
-    override the weekday's normal working intervals entirely (closed unless
-    explicitly marked as an exceptional working day, in which case the
-    day's normal weekly intervals still apply).
+    the calendar's own timezone, for the given calendar date. A Holiday row
+    with is_working=False closes the day outright, regardless of its normal
+    weekday schedule. A Holiday row with is_working=True is an exceptional
+    working day: it uses its own start_time/end_time if given, otherwise
+    falls back to whatever that weekday's normal WorkingInterval would be.
     """
     tz = ZoneInfo(calendar.timezone)
     holiday = calendar.holidays.filter(date=date_).first()
     if holiday and not holiday.is_working:
         return []
+    if holiday and holiday.is_working and holiday.start_time and holiday.end_time:
+        start = datetime.combine(date_, holiday.start_time, tzinfo=tz)
+        end = datetime.combine(date_, holiday.end_time, tzinfo=tz)
+        return [(start, end)] if end > start else []
     intervals = calendar.working_intervals.filter(weekday=date_.weekday())
     windows = []
     for interval in intervals:

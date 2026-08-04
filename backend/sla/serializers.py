@@ -12,7 +12,7 @@ class WorkingIntervalSerializer(serializers.ModelSerializer):
 class HolidaySerializer(serializers.ModelSerializer):
     class Meta:
         model = Holiday
-        fields = ['id', 'calendar', 'date', 'name', 'is_working']
+        fields = ['id', 'calendar', 'date', 'name', 'is_working', 'start_time', 'end_time']
         read_only_fields = ['id', 'calendar']
 
 
