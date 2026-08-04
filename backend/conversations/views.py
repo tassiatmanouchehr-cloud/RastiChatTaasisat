@@ -4,8 +4,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.throttling import ScopedRateThrottle
 from .models import Conversation, Message, MessageReceipt, Assignment
 from .serializers import ConversationSerializer, MessageSerializer
+from .media_validation import validate_and_normalize_upload, UploadValidationError
 from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent
 from visitors.models import Visitor, VisitorSession
 from catalog.models import Product
@@ -35,6 +37,7 @@ def _broadcast_seen(conv_id, reader, group_prefix='chat'):
 class CustomerConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
     permission_classes = [IsWorkspaceOperator]
+    throttle_scope = 'media_upload'  # only consulted by the `upload` action's ScopedRateThrottle
     def get_queryset(self):
         return Conversation.objects.filter(workspace__memberships__user=self.request.user, type=Conversation.Type.CUSTOMER)
     @action(detail=True, methods=['get'])
@@ -60,7 +63,8 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
         conv = self.get_object(); conv.status = Conversation.Status.CLOSED; conv.save()
         return Response(ConversationSerializer(conv).data)
 
-    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser],
+            throttle_classes=[ScopedRateThrottle])
     def upload(self, request, pk=None):
         conv = self.get_object()
         message_type = request.data.get('message_type', Message.MessageType.IMAGE)
@@ -74,6 +78,10 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Missing client_message_id'}, status=status.HTTP_400_BAD_REQUEST)
         if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
             return Response({'error': 'Duplicate message'}, status=status.HTTP_409_CONFLICT)
+        try:
+            file = validate_and_normalize_upload(file, message_type)
+        except UploadValidationError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         metadata = {}
         caption = (request.data.get('caption') or '').strip()
         if caption:
@@ -204,6 +212,8 @@ class WidgetMarkReadView(APIView):
 class WidgetUploadView(APIView):
     permission_classes = []
     parser_classes = [MultiPartParser, FormParser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'media_upload'
     def post(self, request, conv_id):
         try:
             conv = _get_visitor_conversation(request.data.get('session_token'), conv_id)
@@ -220,6 +230,10 @@ class WidgetUploadView(APIView):
             return Response({'error': 'Missing client_message_id'}, status=status.HTTP_400_BAD_REQUEST)
         if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
             return Response({'error': 'Duplicate message'}, status=status.HTTP_409_CONFLICT)
+        try:
+            file = validate_and_normalize_upload(file, message_type)
+        except UploadValidationError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         metadata = {}
         caption = (request.data.get('caption') or '').strip()
         if caption:
@@ -249,14 +263,20 @@ class WidgetRateConversationView(APIView):
             return Response({'error': 'Invalid rating'}, status=status.HTTP_400_BAD_REQUEST)
         if rating < 1 or rating > 5:
             return Response({'error': 'Rating must be between 1 and 5'}, status=status.HTTP_400_BAD_REQUEST)
-        client_msg_id = request.data.get('client_message_id') or f'rating_{conv.id}'
-        if not Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
-            msg = Message.objects.create(
-                conversation=conv, sender_type=Message.SenderType.VISITOR, sender_visitor=conv.visitor,
-                content='', client_message_id=client_msg_id, message_type=Message.MessageType.RATING,
-                metadata={'rating': rating},
+        if conv.rating is not None:
+            return Response(
+                {'error': 'Conversation has already been rated'},
+                status=status.HTTP_409_CONFLICT,
             )
-            _broadcast(conv.id, MessageSerializer(msg, context={'request': request}).data)
+        client_msg_id = request.data.get('client_message_id') or f'rating_{conv.id}'
+        if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
+            return Response({'error': 'Duplicate message'}, status=status.HTTP_409_CONFLICT)
+        msg = Message.objects.create(
+            conversation=conv, sender_type=Message.SenderType.VISITOR, sender_visitor=conv.visitor,
+            content='', client_message_id=client_msg_id, message_type=Message.MessageType.RATING,
+            metadata={'rating': rating},
+        )
+        _broadcast(conv.id, MessageSerializer(msg, context={'request': request}).data)
         conv.rating = rating
         conv.save(update_fields=['rating'])
         return Response(ConversationSerializer(conv).data, status=200)

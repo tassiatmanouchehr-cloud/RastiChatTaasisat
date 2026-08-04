@@ -93,6 +93,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 8 * 1024 * 1024  # 8MB cap for chat attachments (images/voice notes)
 
+# Enforced upper bounds for validated chat attachments (see conversations/media_validation.py).
+MEDIA_UPLOAD_MAX_IMAGE_BYTES = int(os.environ.get('MEDIA_UPLOAD_MAX_IMAGE_BYTES', 8 * 1024 * 1024))
+MEDIA_UPLOAD_MAX_VOICE_BYTES = int(os.environ.get('MEDIA_UPLOAD_MAX_VOICE_BYTES', 15 * 1024 * 1024))
+# Dotted path to an optional `callable(file) -> bool` malware-scan hook. Unset by default.
+MEDIA_UPLOAD_SCAN_HOOK = os.environ.get('MEDIA_UPLOAD_SCAN_HOOK', '')
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
@@ -117,6 +123,11 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_THROTTLE_RATES': {
+        # Applies per-user (operators) or per-IP (visitors, who are anonymous
+        # to DRF) on the image/voice upload endpoints only.
+        'media_upload': os.environ.get('MEDIA_UPLOAD_THROTTLE_RATE', '30/min'),
+    },
 }
 
 # JWT Settings
