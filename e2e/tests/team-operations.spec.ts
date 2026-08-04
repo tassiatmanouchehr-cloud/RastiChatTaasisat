@@ -406,8 +406,13 @@ Notification.objects.create(recipient=user_b, workspace=ws_b, event_type='MENTIO
     await ticketRow.waitFor({ timeout: 15000 });
     await ticketRow.click();
 
-    support.once('dialog', (dialog) => dialog.accept());
+    // handleAssign() awaits the assign API call before firing a blocking
+    // native alert(); wait for the dialog itself (not just the click) so a
+    // later interaction can't race the alert while it's still blocking the
+    // page's JS thread.
+    const dialogPromise = support.waitForEvent('dialog');
     await support.getByText('تخصیص به من').click();
+    (await dialogPromise).accept();
 
     const replyText = uniqueText('پاسخ پشتیبانی پلتفرم');
     await support.locator('input[placeholder="پاسخ..."]').fill(replyText);
