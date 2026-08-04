@@ -267,13 +267,18 @@ touch_presence(op2, explicit_status='ONLINE')
     const assignedLabel = await operator.getByTitle('واگذاری به همکار').inputValue();
     expect(assignedLabel).not.toBe('');
 
-    // Restore operator1's capacity so it doesn't leak into later runs.
+    // Restore operator1's capacity and remove the throwaway high-priority
+    // queue so neither leaks into later tests' routing/claim assumptions.
     runDjangoScript(`
 from accounts.models import User
+from workspaces.models import Workspace
+from queues.models import Queue
 op1 = User.objects.get(email='operator@ws.com')
 presence = op1.presence
 presence.max_capacity = 10
 presence.save(update_fields=['max_capacity'])
+ws = Workspace.objects.get(name='Sample Workspace')
+Queue.objects.filter(workspace=ws, name='صف خودکار تست').delete()
 `);
 
     await customerCtx.close();
@@ -389,7 +394,7 @@ Notification.objects.create(recipient=user_b, workspace=ws_b, event_type='MENTIO
     const subject = uniqueText('تیکت پلتفرم E2E');
     await loginOperator(admin, 'admin@ws.com');
     await admin.goto(`${DASHBOARD_URL}/support`);
-    await admin.getByText('تیکت جدید').click();
+    await admin.getByRole('button', { name: 'تیکت جدید' }).click();
     await admin.getByPlaceholder('موضوع').fill(subject);
     await admin.getByPlaceholder('پیام اولیه').fill('لطفا کمک کنید');
     await admin.getByText('ارسال درخواست').click();

@@ -26,7 +26,7 @@ class InternalNoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
         fields = [
-            'id', 'conversation', 'content', 'sender_email', 'sender_display_name',
+            'id', 'conversation', 'content', 'message_type', 'sender_email', 'sender_display_name',
             'client_message_id', 'created_at', 'mentions',
         ]
 
