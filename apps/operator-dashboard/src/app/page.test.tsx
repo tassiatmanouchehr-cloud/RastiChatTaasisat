@@ -13,6 +13,8 @@ vi.mock('@/lib/api', () => ({
   markConversationRead: vi.fn(),
   assignConversation: vi.fn(),
   closeConversation: vi.fn(),
+  reopenConversation: vi.fn(),
+  fetchTeammates: vi.fn(),
   uploadAttachment: vi.fn(),
   shareProduct: vi.fn(),
   requestRating: vi.fn(),
@@ -32,6 +34,7 @@ import {
   fetchConversations, fetchMessages, connectWebSocket, uploadAttachment, shareProduct,
   fetchProducts, fetchTags, fetchConversationTags, attachConversationTag,
   fetchConversationNotes, createConversationNote, fetchCustomerContext, markConversationRead,
+  assignConversation, closeConversation, reopenConversation, fetchTeammates,
 } from '@/lib/api';
 
 const visitorA = { id: 'v1', name: 'سارا محمدی', email: null, mobile: '0912', created_at: '2024-01-01T00:00:00Z' };
@@ -46,6 +49,11 @@ const convB = {
   id: 'c2', status: 'PENDING', subject: '', category: '', notes: '', rating: null,
   created_at: '2024-01-01T09:00:00Z', updated_at: '2024-01-01T09:00:00Z', unread_count: 0,
   visitor: visitorB, last_message: { content: 'ممنون', message_type: 'TEXT', sender_type: 'VISITOR', created_at: '2024-01-01T09:00:00Z' },
+};
+const convClosed = {
+  id: 'c3', status: 'CLOSED', subject: '', category: '', notes: '', rating: null, closed_at: '2024-01-02T00:00:00Z',
+  created_at: '2024-01-01T08:00:00Z', updated_at: '2024-01-01T08:00:00Z', unread_count: 0,
+  visitor: { id: 'v3', name: 'رضا کریمی', email: null, mobile: null, created_at: '2024-01-01T00:00:00Z' }, last_message: null,
 };
 
 const product = { id: 'p1', brand: 'Arom', name: 'Candle', price: '890000', old_price: null, rating: '5', reviews_count: 12, image: '' };
@@ -62,6 +70,7 @@ function setDefaultMocks() {
     order_count: 3, total_spent: '2340000', score: '4.9', recent_orders: [],
   });
   vi.mocked(markConversationRead).mockResolvedValue(undefined);
+  vi.mocked(fetchTeammates).mockResolvedValue([{ id: 'op1', display_name: 'همکار یک', email: 'op1@test.com' }]);
 }
 
 // jsdom doesn't implement scrollIntoView; the page calls it on every message-list update.
@@ -271,5 +280,109 @@ describe('Operator dashboard — customer conversations page', () => {
     await selectConversation('علی رضایی');
     await waitFor(() => expect(connectWebSocket).toHaveBeenCalledWith('c2', expect.any(Function)));
     expect(connectWebSocket).toHaveBeenCalledTimes(2);
+  });
+
+  it('loads teammates for the selected conversation and reassigns via the dropdown', async () => {
+    vi.mocked(assignConversation).mockResolvedValue({ ...convA, assigned_to: { id: 'op1', display_name: 'همکار یک', email: 'op1@test.com' } });
+    render(<DashboardPage />);
+    await selectConversation('سارا محمدی');
+    await waitFor(() => expect(fetchTeammates).toHaveBeenCalledWith('c1'));
+
+    const select = await screen.findByTitle('واگذاری به همکار');
+    fireEvent.change(select, { target: { value: 'op1' } });
+    await waitFor(() => expect(assignConversation).toHaveBeenCalledWith('c1', 'op1'));
+  });
+
+  it('shows a reopen button for closed conversations and reopens them', async () => {
+    vi.mocked(fetchConversations).mockResolvedValue([convA, convB, convClosed]);
+    vi.mocked(reopenConversation).mockResolvedValue({ ...convClosed, status: 'OPEN', closed_at: null });
+    render(<DashboardPage />);
+    await selectConversation('رضا کریمی');
+    const reopenBtn = await screen.findByText('بازگشایی');
+    fireEvent.click(reopenBtn);
+    await waitFor(() => expect(reopenConversation).toHaveBeenCalledWith('c3'));
+    await waitFor(() => expect(screen.getByText('گفتگو دوباره باز شد')).toBeDefined());
+  });
+
+  it('shows a dismissible error toast when an action fails, instead of a blocking alert', async () => {
+    vi.mocked(closeConversation).mockRejectedValue(new Error('network error'));
+    render(<DashboardPage />);
+    await selectConversation('سارا محمدی');
+    fireEvent.click(await screen.findByText('پایان گفتگو'));
+    const toastMsg = await screen.findByText('پایان گفتگو ناموفق بود');
+    expect(toastMsg).toBeDefined();
+    fireEvent.click(screen.getByText('✕'));
+    await waitFor(() => expect(screen.queryByText('پایان گفتگو ناموفق بود')).toBeNull());
+  });
+
+  describe('voice recording', () => {
+    let clock = 1_000_000;
+    class FakeMediaRecorder {
+      static instances: FakeMediaRecorder[] = [];
+      state: 'inactive' | 'recording' = 'inactive';
+      ondataavailable: ((e: { data: Blob }) => void) | null = null;
+      onstop: (() => void) | null = null;
+      constructor() { FakeMediaRecorder.instances.push(this); }
+      start() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        this.ondataavailable?.({ data: new Blob(['x'], { type: 'audio/webm' }) });
+        this.onstop?.();
+      }
+    }
+
+    beforeEach(() => {
+      clock = 1_000_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      FakeMediaRecorder.instances = [];
+      // @ts-expect-error test double
+      global.MediaRecorder = FakeMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        value: { getUserMedia: vi.fn(() => Promise.resolve({ getTracks: () => [{ stop: vi.fn() }] })) },
+        configurable: true,
+      });
+    });
+
+    it('records and uploads a voice message on mic start/stop', async () => {
+      vi.mocked(uploadAttachment).mockResolvedValue({
+        id: 'm4', sender_type: 'USER', content: '', message_type: 'VOICE', client_message_id: 'gen',
+        created_at: new Date().toISOString(), seen: true, attachment_url: 'https://example.com/v.webm', metadata: { duration: 2 },
+      });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      const micBtn = await screen.findByTitle('پیام صوتی');
+      fireEvent.click(micBtn);
+      await waitFor(() => expect(FakeMediaRecorder.instances.length).toBe(1));
+
+      clock += 1500;
+      fireEvent.click(micBtn);
+      await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith('c1', expect.any(File), 'VOICE', expect.any(String), { duration: '2' }));
+    });
+
+    it('cancels a recording without uploading anything', async () => {
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      const micBtn = await screen.findByTitle('پیام صوتی');
+      fireEvent.click(micBtn);
+      await waitFor(() => expect(FakeMediaRecorder.instances.length).toBe(1));
+
+      clock += 1500;
+      fireEvent.click(await screen.findByTitle('لغو ضبط'));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(uploadAttachment).not.toHaveBeenCalled();
+    });
+
+    it('shows an inline toast instead of alert() when microphone access is denied', async () => {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        value: { getUserMedia: vi.fn(() => Promise.reject(new Error('denied'))) },
+        configurable: true,
+      });
+      const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByTitle('پیام صوتی'));
+      await screen.findByText('برای ارسال پیام صوتی، دسترسی به میکروفون لازم است.');
+      expect(alertSpy).not.toHaveBeenCalled();
+    });
   });
 });
