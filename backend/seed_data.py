@@ -8,6 +8,7 @@ from accounts.models import User
 from platforms.models import Platform, PlatformMembership
 from workspaces.models import Workspace, WorkspaceMembership
 from projects.models import Project
+from catalog.models import Product
 
 print("Seeding database...")
 
@@ -39,6 +40,15 @@ PlatformMembership.objects.get_or_create(user=psa, platform=platform, defaults={
 
 # 7. Create Project
 proj, _ = Project.objects.get_or_create(name='Sample Website', defaults={'workspace': ws})
+
+# 8. Sample product catalog (used by the operator dashboard's "share product" picker)
+sample_products = [
+    {'name': 'شمع معطر وانیل و کهره', 'brand': 'آرُم هوم', 'price': 890000, 'old_price': 1120000, 'rating': 5, 'reviews_count': 128},
+    {'name': 'گلدان سرامیکی مینیمال', 'brand': 'آرُم هوم', 'price': 1450000, 'old_price': None, 'rating': 5, 'reviews_count': 86},
+    {'name': 'ست ماگ سرامیکی کرمی', 'brand': 'آرُم هوم', 'price': 650000, 'old_price': None, 'rating': 5, 'reviews_count': 64},
+]
+for p in sample_products:
+    Product.objects.get_or_create(workspace=ws, name=p['name'], defaults=p)
 
 print("\n=== Seed Data Created Successfully ===")
 print("Operator Login   : operator@ws.com / pass1234")

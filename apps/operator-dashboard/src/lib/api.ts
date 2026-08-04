@@ -45,6 +45,90 @@ export const sendMessage = async (convId: string, content: string, clientId: str
     return res.json();
 };
 
+export const patchConversation = async (convId: string, patch: Record<string, string>) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error('Failed to update conversation');
+    return res.json();
+};
+
+export const markConversationRead = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/mark_read/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to mark read');
+};
+
+export const assignConversation = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/assign/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to assign conversation');
+    return res.json();
+};
+
+export const closeConversation = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/close/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to close conversation');
+    return res.json();
+};
+
+export const uploadAttachment = async (convId: string, file: File, messageType: 'IMAGE' | 'VOICE', clientId: string, extra?: Record<string, string>) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('message_type', messageType);
+    form.append('client_message_id', clientId);
+    if (extra) Object.entries(extra).forEach(([k, v]) => form.append(k, v));
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/upload/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+        body: form,
+    });
+    if (!res.ok) throw new Error('Failed to upload attachment');
+    return res.json();
+};
+
+export const shareProduct = async (convId: string, productId: string, clientId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/share_product/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: productId, client_message_id: clientId }),
+    });
+    if (!res.ok) throw new Error('Failed to share product');
+    return res.json();
+};
+
+export const requestRating = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/request_rating/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to request rating');
+    return res.json();
+};
+
+export const fetchProducts = async () => {
+    const res = await fetch(`${API_BASE}/products/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch products');
+    return res.json();
+};
+
+export const sendTypingEvent = (ws: WebSocket | null) => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'typing' }));
+};
+
+export const sendMarkReadEvent = (ws: WebSocket | null) => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'mark_read' }));
+};
+
 export const connectWebSocket = (convId: string, onMessage: (data: any) => void) => {
     const token = getToken();
     console.log("Connecting to WS:", `${WS_BASE}/dashboard/${token}/${convId}/`);

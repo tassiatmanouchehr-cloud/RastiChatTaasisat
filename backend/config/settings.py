@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     'projects',
     'visitors',
     'conversations',
+    'catalog',
     'audit',
     'common',
 ]
@@ -86,7 +87,11 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+FILE_UPLOAD_MAX_MEMORY_SIZE = 8 * 1024 * 1024  # 8MB cap for chat attachments (images/voice notes)
 
 CHANNEL_LAYERS = {
     "default": {

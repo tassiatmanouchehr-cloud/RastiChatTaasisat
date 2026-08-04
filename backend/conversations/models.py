@@ -33,6 +33,8 @@ class Conversation(models.Model):
     assigned_to = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_conversations')
     
     closed_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True, default='')
+    rating = models.PositiveSmallIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -42,12 +44,23 @@ class Message(models.Model):
         USER = 'USER', 'User'
         SYSTEM = 'SYSTEM', 'System'
 
+    class MessageType(models.TextChoices):
+        TEXT = 'TEXT', 'Text'
+        IMAGE = 'IMAGE', 'Image'
+        VOICE = 'VOICE', 'Voice'
+        PRODUCT = 'PRODUCT', 'Product'
+        RATING_REQUEST = 'RATING_REQUEST', 'Rating Request'
+        RATING = 'RATING', 'Rating'
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='messages')
     sender_type = models.CharField(max_length=10, choices=SenderType.choices)
     sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     sender_visitor = models.ForeignKey(Visitor, on_delete=models.SET_NULL, null=True, blank=True)
-    content = models.TextField()
+    content = models.TextField(blank=True)
+    message_type = models.CharField(max_length=20, choices=MessageType.choices, default=MessageType.TEXT)
+    metadata = models.JSONField(default=dict, blank=True)
+    attachment = models.FileField(upload_to='attachments/%Y/%m/%d/', null=True, blank=True)
     client_message_id = models.CharField(max_length=255, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
