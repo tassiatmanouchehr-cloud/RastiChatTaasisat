@@ -10,6 +10,23 @@ function uniqueText(label: string) {
 }
 
 test.describe('Team operations, queues and SLA', () => {
+  test.beforeAll(() => {
+    // Give both seeded operators generous headroom before this suite starts.
+    // Conversations created by this spec (and by other spec files that may
+    // run first, e.g. customer-operator-flow.spec.ts) are never closed, so
+    // active_conversation_count accumulates across a full test run; without
+    // this, claim/auto-assign tests can spuriously hit the default
+    // max_capacity=10 ceiling well before the suite finishes.
+    runDjangoScript(`
+from accounts.models import User
+for email in ['operator@ws.com', 'operator2@ws.com']:
+    u = User.objects.get(email=email)
+    p = u.presence
+    p.max_capacity = 50
+    p.save(update_fields=['max_capacity'])
+`);
+  });
+
   test('new customer conversation enters the workspace queue unassigned', async ({ browser }) => {
     const customerCtx = await browser.newContext();
     const operatorCtx = await browser.newContext();
@@ -267,15 +284,16 @@ touch_presence(op2, explicit_status='ONLINE')
     const assignedLabel = await operator.getByTitle('واگذاری به همکار').inputValue();
     expect(assignedLabel).not.toBe('');
 
-    // Restore operator1's capacity and remove the throwaway high-priority
-    // queue so neither leaks into later tests' routing/claim assumptions.
+    // Restore operator1's capacity (back to this suite's baseline, not the
+    // model default) and remove the throwaway high-priority queue so
+    // neither leaks into later tests' routing/claim assumptions.
     runDjangoScript(`
 from accounts.models import User
 from workspaces.models import Workspace
 from queues.models import Queue
 op1 = User.objects.get(email='operator@ws.com')
 presence = op1.presence
-presence.max_capacity = 10
+presence.max_capacity = 50
 presence.save(update_fields=['max_capacity'])
 ws = Workspace.objects.get(name='Sample Workspace')
 Queue.objects.filter(workspace=ws, name='صف خودکار تست').delete()

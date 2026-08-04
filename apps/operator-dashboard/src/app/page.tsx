@@ -922,22 +922,25 @@ export default function DashboardPage() {
             <div className={`flex-1 flex-col ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
                 {selectedConv ? (
                     <>
-                        <div className="p-3 bg-white border-b border-gray-200 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                                <button onClick={() => setMobileView('list')} className="md:hidden text-gray-500 px-1">›</button>
-                                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(selectedConv.visitor?.name)}</div>
-                                <div className="min-w-0">
-                                    <div className="font-bold text-sm truncate">{selectedConv.visitor?.name || 'مهمان'}</div>
-                                    <div className="text-[11px] text-gray-500 flex items-center gap-1 flex-wrap">
-                                        <span>{STATUS_LABEL[selectedConv.status] || selectedConv.status}</span>
-                                        {selectedConv.rating && <span className="text-gold">• امتیاز {selectedConv.rating}★</span>}
-                                        {selectedConv.team_name && <span>• تیم {selectedConv.team_name}</span>}
-                                        {slaState(selectedConv.sla) === 'breached' && <span className="text-red-600 font-semibold">• نقض SLA</span>}
-                                        {slaState(selectedConv.sla) === 'approaching' && <span className="text-terracotta-2 font-semibold">• {slaCountdownLabel(selectedConv.sla)} تا موعد</span>}
+                        <div className="p-3 bg-white border-b border-gray-200 flex flex-col gap-2">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                    <button onClick={() => setMobileView('list')} className="md:hidden text-gray-500 px-1">›</button>
+                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(selectedConv.visitor?.name)}</div>
+                                    <div className="min-w-0">
+                                        <div className="font-bold text-sm truncate">{selectedConv.visitor?.name || 'مهمان'}</div>
+                                        <div className="text-[11px] text-gray-500 flex items-center gap-1 flex-wrap">
+                                            <span>{STATUS_LABEL[selectedConv.status] || selectedConv.status}</span>
+                                            {selectedConv.rating && <span className="text-gold">• امتیاز {selectedConv.rating}★</span>}
+                                            {selectedConv.team_name && <span>• تیم {selectedConv.team_name}</span>}
+                                            {slaState(selectedConv.sla) === 'breached' && <span className="text-red-600 font-semibold">• نقض SLA</span>}
+                                            {slaState(selectedConv.sla) === 'approaching' && <span className="text-terracotta-2 font-semibold">• {slaCountdownLabel(selectedConv.sla)} تا موعد</span>}
+                                        </div>
                                     </div>
                                 </div>
+                                <button onClick={() => setShowMobileInfo(true)} className="lg:hidden w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center flex-none" title="اطلاعات مشتری">ⓘ</button>
                             </div>
-                            <div className="flex items-center gap-2 flex-none flex-wrap justify-end">
+                            <div className="flex items-center gap-2 flex-wrap justify-end">
                                 <select
                                     value={selectedConv.priority}
                                     onChange={(e) => handleSetPriority(e.target.value)}
@@ -977,7 +980,6 @@ export default function DashboardPage() {
                                 ) : (
                                     <button onClick={handleClose} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600">پایان گفتگو</button>
                                 )}
-                                <button onClick={() => setShowMobileInfo(true)} className="lg:hidden w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center flex-none" title="اطلاعات مشتری">ⓘ</button>
                             </div>
                         </div>
 
