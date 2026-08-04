@@ -1,0 +1,15 @@
+{
+  "name": "rastichat-widget",
+  "version": "1.0.0",
+  "description": "RastiChat embeddable widget",
+  "main": "dist/widget.js",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}

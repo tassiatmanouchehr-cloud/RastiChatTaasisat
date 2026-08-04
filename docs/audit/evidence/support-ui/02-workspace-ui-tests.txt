@@ -1,0 +1,68 @@
+Timestamp: 2026-08-02 10:57:58.187380
+Command: npm run test
+Working Dir: D:\Projects\Rastichat\1\apps\operator-dashboard
+Exit Code: 0
+
+--- STDOUT ---
+
+> operator-dashboard@0.1.0 test
+> vitest run
+
+
+[7m[1m[36m RUN [39m[22m[27m [36mv1.6.1[39m [90mD:/Projects/Rastichat/1/apps/operator-dashboard[39m
+
+ [32mâœ“[39m src/lib/api.test.ts [2m ([22m[2m1 test[22m[2m)[22m[90m 19[2mms[22m[39m
+ [32mâœ“[39m src/app/support/page.test.tsx [2m ([22m[2m15 tests[22m[2m)[22m[90m 187[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m16 passed[39m[22m[90m (16)[39m
+[2m   Start at [22m 10:57:56
+[2m   Duration [22m 2.08s[2m (transform 123ms, setup 0ms, collect 398ms, tests 206ms, environment 1.85s, prepare 354ms)[22m
+
+
+
+--- STDERR ---
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+[90mstderr[2m | src/app/support/page.test.tsx[2m > [22m[2mWorkspace Support Page[2m > [22m[2mrenders support title[22m[39m
+An update to SupportPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/app/support/page.test.tsx[2m > [22m[2mWorkspace Support Page[2m > [22m[2mopens create form on button click[22m[39m
+An update to SupportPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/app/support/page.test.tsx[2m > [22m[2mWorkspace Support Page[2m > [22m[2mvalidates create form fields[22m[39m
+An update to SupportPage inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/app/support/page.test.tsx[2m > [22m[2mWorkspace Support Page[2m > [22m[2mhandles 401 safely[22m[39m
+{ response: { status: [33m401[39m } }
+
+[90mstderr[2m | src/app/support/page.test.tsx[2m > [22m[2mWorkspace Support Page[2m > [22m[2mhandles 403 safely[22m[39m
+{ response: { status: [33m403[39m } }
+
+

@@ -1,0 +1,22 @@
+Timestamp: 2026-08-01 23:32:35.839324
+Command: npm ci
+Working Dir: D:\Projects\Rastichat\1\packages\widget
+Exit Code: 0
+
+--- STDOUT ---
+
+added 12 packages, and audited 13 packages in 9s
+
+3 packages are looking for funding
+  run `npm fund` for details
+
+2 vulnerabilities (1 moderate, 1 high)
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+
+--- STDERR ---
+

@@ -1,0 +1,11 @@
+Timestamp: 2026-08-01 23:30:29.455686
+Command: docker-compose exec -T backend python manage.py check
+Working Dir: D:\Projects\Rastichat\1
+Exit Code: 0
+
+--- STDOUT ---
+System check identified no issues (0 silenced).
+
+
+--- STDERR ---
+

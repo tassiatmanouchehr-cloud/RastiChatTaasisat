@@ -1,0 +1,148 @@
+Timestamp: 2026-08-02 00:26:32.297295
+Command: docker-compose exec -T backend python manage.py test conversations.tests_baseline --verbosity=2
+Working Dir: D:\Projects\Rastichat\1
+Exit Code: 1
+
+--- STDOUT ---
+Found 21 test(s).
+Operations to perform:
+  Synchronize unmigrated apps: channels, corsheaders, daphne, drf_spectacular, messages, rest_framework, staticfiles
+  Apply all migrations: accounts, admin, audit, auth, contenttypes, conversations, platforms, projects, sessions, visitors, workspaces
+Synchronizing apps without migrations:
+  Creating tables...
+    Running deferred SQL...
+Running migrations:
+  Applying contenttypes.0001_initial... OK
+  Applying contenttypes.0002_remove_content_type_name... OK
+  Applying auth.0001_initial... OK
+  Applying auth.0002_alter_permission_name_max_length... OK
+  Applying auth.0003_alter_user_email_max_length... OK
+  Applying auth.0004_alter_user_username_opts... OK
+  Applying auth.0005_alter_user_last_login_null... OK
+  Applying auth.0006_require_contenttypes_0002... OK
+  Applying auth.0007_alter_validators_add_error_messages... OK
+  Applying auth.0008_alter_user_username_max_length... OK
+  Applying auth.0009_alter_user_last_name_max_length... OK
+  Applying auth.0010_alter_group_name_max_length... OK
+  Applying auth.0011_update_proxy_permissions... OK
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying accounts.0001_initial... OK
+  Applying accounts.0002_alter_user_managers... OK
+  Applying admin.0001_initial... OK
+  Applying admin.0002_logentry_remove_auto_add... OK
+  Applying admin.0003_logentry_add_action_flag_choices... OK
+  Applying audit.0001_initial... OK
+  Applying platforms.0001_initial... OK
+  Applying workspaces.0001_initial... OK
+  Applying projects.0001_initial... OK
+  Applying visitors.0001_initial... OK
+  Applying conversations.0001_initial... OK
+  Applying sessions.0001_initial... OK
+System check identified no issues (0 silenced).
+
+
+--- STDERR ---
+Creating test database for alias 'default' ('test_rastichat_db')...
+test_10_cross_workspace_operator_denied (conversations.tests_baseline.BaselineSecurityTests.test_10_cross_workspace_operator_denied) ... ok
+test_11_unauth_ws_rejected (conversations.tests_baseline.BaselineSecurityTests.test_11_unauth_ws_rejected) ... ok
+test_12_client_sender_id_ignored (conversations.tests_baseline.BaselineSecurityTests.test_12_client_sender_id_ignored) ... ok
+test_13_operator_cannot_impersonate (conversations.tests_baseline.BaselineSecurityTests.test_13_operator_cannot_impersonate) ... ok
+test_14_visitor_cannot_impersonate (conversations.tests_baseline.BaselineSecurityTests.test_14_visitor_cannot_impersonate) ... ERROR
+test_15_invalid_conv_uuid_handled (conversations.tests_baseline.BaselineSecurityTests.test_15_invalid_conv_uuid_handled) ... ok
+test_16_empty_message_rejected (conversations.tests_baseline.BaselineSecurityTests.test_16_empty_message_rejected) ... ok
+test_17_long_message_rejected (conversations.tests_baseline.BaselineSecurityTests.test_17_long_message_rejected) ... ok
+test_18_malformed_ws_json_handled (conversations.tests_baseline.BaselineSecurityTests.test_18_malformed_ws_json_handled) ... ok
+test_19_duplicate_idempotency (conversations.tests_baseline.BaselineSecurityTests.test_19_duplicate_idempotency) ... ok
+test_1_visitor_start_chat (conversations.tests_baseline.BaselineSecurityTests.test_1_visitor_start_chat) ... ok
+test_20_reconnect_no_duplicates (conversations.tests_baseline.BaselineSecurityTests.test_20_reconnect_no_duplicates) ... ok
+test_2_visitor_can_send_message (conversations.tests_baseline.BaselineSecurityTests.test_2_visitor_can_send_message) ... ok
+test_3_operator_receives_message (conversations.tests_baseline.BaselineSecurityTests.test_3_operator_receives_message) ... ok
+test_4_operator_can_reply (conversations.tests_baseline.BaselineSecurityTests.test_4_operator_can_reply) ... ok
+test_5_visitor_receives_reply (conversations.tests_baseline.BaselineSecurityTests.test_5_visitor_receives_reply) ... ok
+test_6_history_survives_refresh (conversations.tests_baseline.BaselineSecurityTests.test_6_history_survives_refresh) ... ok
+test_7_anonymous_visitor_rejected (conversations.tests_baseline.BaselineSecurityTests.test_7_anonymous_visitor_rejected) ... ok
+test_8_visitor_a_cannot_access_visitor_b (conversations.tests_baseline.BaselineSecurityTests.test_8_visitor_a_cannot_access_visitor_b) ... ok
+test_9_cross_project_ws_denied (conversations.tests_baseline.BaselineSecurityTests.test_9_cross_project_ws_denied) ... ok
+test_e2e_customer_chat_flow (conversations.tests_baseline.BaselineSecurityTests.test_e2e_customer_chat_flow) ... FAIL
+
+======================================================================
+ERROR: test_14_visitor_cannot_impersonate (conversations.tests_baseline.BaselineSecurityTests.test_14_visitor_cannot_impersonate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/fields/related_descriptors.py", line 218, in __get__
+    rel_obj = self.field.get_cached_value(instance)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/fields/mixins.py", line 15, in get_cached_value
+    return instance._state.fields_cache[cache_name]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+KeyError: 'sender_visitor'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/asgiref/sync.py", line 332, in __call__
+    return call_result.result()
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/usr/local/lib/python3.11/site-packages/asgiref/sync.py", line 372, in main_wrap
+    result = await awaitable
+             ^^^^^^^^^^^^^^^
+  File "/app/conversations/tests_baseline.py", line 141, in test_14_visitor_cannot_impersonate
+    self.assertEqual(msg.sender_visitor, self.vis_a)
+                     ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/fields/related_descriptors.py", line 236, in __get__
+    rel_obj = self.get_object(instance)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/fields/related_descriptors.py", line 199, in get_object
+    return qs.get(self.field.get_reverse_related_filter(instance))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/query.py", line 633, in get
+    num = len(clone)
+          ^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/query.py", line 380, in __len__
+    self._fetch_all()
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/query.py", line 1881, in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/query.py", line 91, in __iter__
+    results = compiler.execute_sql(
+              ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/django/db/models/sql/compiler.py", line 1560, in execute_sql
+    cursor = self.connection.cursor()
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/django/utils/asyncio.py", line 24, in inner
+    raise SynchronousOnlyOperation(message)
+django.core.exceptions.SynchronousOnlyOperation: You cannot call this from an async context - use a thread or sync_to_async.
+
+======================================================================
+FAIL: test_e2e_customer_chat_flow (conversations.tests_baseline.BaselineSecurityTests.test_e2e_customer_chat_flow)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/asgiref/sync.py", line 332, in __call__
+    return call_result.result()
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/usr/local/lib/python3.11/site-packages/asgiref/sync.py", line 372, in main_wrap
+    result = await awaitable
+             ^^^^^^^^^^^^^^^
+  File "/app/conversations/tests_baseline.py", line 213, in test_e2e_customer_chat_flow
+    self.assertEqual(response['content'], unique_reply)
+AssertionError: 'E2E_Visitor_0acaca3b-098b-40a7-bcf1-cc522ae3ea57' != 'E2E_Operator_478b2356-3efe-466e-b554-228f59afb57c'
+- E2E_Visitor_0acaca3b-098b-40a7-bcf1-cc522ae3ea57
++ E2E_Operator_478b2356-3efe-466e-b554-228f59afb57c
+
+
+----------------------------------------------------------------------
+Ran 21 tests in 31.912s
+
+FAILED (failures=1, errors=1)
+Destroying test database for alias 'default' ('test_rastichat_db')...
+

@@ -1,0 +1,22 @@
+Timestamp: 2026-08-01 23:31:59.213994
+Command: npm ci
+Working Dir: D:\Projects\Rastichat\1\apps\operator-dashboard
+Exit Code: 0
+
+--- STDOUT ---
+
+added 356 packages, and audited 357 packages in 51s
+
+145 packages are looking for funding
+  run `npm fund` for details
+
+3 high severity vulnerabilities
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+
+--- STDERR ---
+

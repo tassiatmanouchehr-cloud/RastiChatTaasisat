@@ -1,0 +1,77 @@
+Timestamp: 2026-08-02 10:04:48.069718
+Command: npm run test
+Working Dir: D:\Projects\Rastichat\1\apps\platform-dashboard
+Exit Code: 1
+
+--- STDOUT ---
+
+> platform-dashboard@0.1.0 test
+> vitest run
+
+
+[7m[1m[36m RUN [39m[22m[27m [36mv1.6.1[39m [90mD:/Projects/Rastichat/1/apps/platform-dashboard[39m
+
+ [33mâ‌¯[39m src/lib/api.test.ts [2m ([22m[2m1 test[22m [2m|[22m [31m1 failed[39m[2m)[22m[90m 123[2mms[22m[39m
+[31m   [33mâ‌¯[31m src/lib/api.test.ts[2m > [22mAPI Client[2m > [22mshould fetch conversations with auth header[39m
+[31m     â†’ expected "spy" to be called with arguments: [ StringContaining{â€¦}, â€¦(1) ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  Array [[22m
+[32m-   StringContaining "/conversations/customer/",[90m
+[31m+   "http://localhost:8080/api/v1/platform/support/",[90m
+[2m    Object {[22m
+[2m      "headers": Object {[22m
+[2m        "Authorization": "Bearer fake-token",[22m
+[2m      },[22m
+[2m    },[22m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m   Start at [22m 10:04:44
+[2m   Duration [22m 3.35s[2m (transform 66ms, setup 1ms, collect 42ms, tests 123ms, environment 2.36s, prepare 396ms)[22m
+
+
+
+--- STDERR ---
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+[31mâژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯[1m[7m Failed Tests 1 [27m[22mâژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m src/lib/api.test.ts[2m > [22mAPI Client[2m > [22mshould fetch conversations with auth header
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ StringContaining{â€¦}, â€¦(1) ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  Array [[22m
+[32m-   StringContaining "/conversations/customer/",[90m
+[31m+   "http://localhost:8080/api/v1/platform/support/",[90m
+[2m    Object {[22m
+[2m      "headers": Object {[22m
+[2m        "Authorization": "Bearer fake-token",[22m
+[2m      },[22m
+[2m    },[22m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[36m [2mâ‌¯[22m src/lib/api.test.ts:[2m25:26[22m[39m
+    [90m 23| [39m    
+    [90m 24| [39m    [34mexpect[39m(result)[33m.[39m[34mtoEqual[39m([{ id[33m:[39m [32m'1'[39m }])[33m;[39m
+    [90m 25| [39m    [34mexpect[39m(global[33m.[39mfetch)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                         [31m^[39m
+    [90m 26| [39m      expect[33m.[39m[34mstringContaining[39m([32m'/conversations/customer/'[39m) [33m===[39m [35mfalse[39m [33m?[39m â€¦
+    [90m 27| [39m      { headers[33m:[39m { [33mAuthorization[39m[33m:[39m [32m'Bearer fake-token'[39m } }
+
+[31m[2mâژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯âژ¯[1/1]âژ¯[22m[39m
+
+

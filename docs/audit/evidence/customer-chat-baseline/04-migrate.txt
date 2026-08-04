@@ -1,0 +1,14 @@
+Timestamp: 2026-08-01 23:30:50.104966
+Command: docker-compose exec -T backend python manage.py migrate
+Working Dir: D:\Projects\Rastichat\1
+Exit Code: 0
+
+--- STDOUT ---
+Operations to perform:
+  Apply all migrations: accounts, admin, audit, auth, contenttypes, conversations, platforms, projects, sessions, visitors, workspaces
+Running migrations:
+  No migrations to apply.
+
+
+--- STDERR ---
+

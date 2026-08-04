@@ -1,0 +1,24 @@
+Timestamp: 2026-08-02 10:57:52.464611
+Command: npm ci
+Working Dir: D:\Projects\Rastichat\1\apps\operator-dashboard
+Exit Code: 0
+
+--- STDOUT ---
+
+added 495 packages, and audited 496 packages in 16s
+
+175 packages are looking for funding
+  run `npm fund` for details
+
+7 vulnerabilities (2 moderate, 4 high, 1 critical)
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+
+--- STDERR ---
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+npm warn deprecated tsconfck@3.1.6: unmaintained
+

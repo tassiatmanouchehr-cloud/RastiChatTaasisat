@@ -1,0 +1,103 @@
+Timestamp: 2026-08-02 10:57:35.863855
+Command: docker-compose exec -T backend python manage.py test conversations.tests_baseline conversations.tests_support --verbosity=2
+Working Dir: D:\Projects\Rastichat\1
+Exit Code: 0
+
+--- STDOUT ---
+Found 50 test(s).
+Operations to perform:
+  Synchronize unmigrated apps: channels, corsheaders, daphne, drf_spectacular, messages, rest_framework, staticfiles
+  Apply all migrations: accounts, admin, audit, auth, contenttypes, conversations, platforms, projects, sessions, visitors, workspaces
+Synchronizing apps without migrations:
+  Creating tables...
+    Running deferred SQL...
+Running migrations:
+  Applying contenttypes.0001_initial... OK
+  Applying contenttypes.0002_remove_content_type_name... OK
+  Applying auth.0001_initial... OK
+  Applying auth.0002_alter_permission_name_max_length... OK
+  Applying auth.0003_alter_user_email_max_length... OK
+  Applying auth.0004_alter_user_username_opts... OK
+  Applying auth.0005_alter_user_last_login_null... OK
+  Applying auth.0006_require_contenttypes_0002... OK
+  Applying auth.0007_alter_validators_add_error_messages... OK
+  Applying auth.0008_alter_user_username_max_length... OK
+  Applying auth.0009_alter_user_last_name_max_length... OK
+  Applying auth.0010_alter_group_name_max_length... OK
+  Applying auth.0011_update_proxy_permissions... OK
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying accounts.0001_initial... OK
+  Applying accounts.0002_alter_user_managers... OK
+  Applying admin.0001_initial... OK
+  Applying admin.0002_logentry_remove_auto_add... OK
+  Applying admin.0003_logentry_add_action_flag_choices... OK
+  Applying audit.0001_initial... OK
+  Applying platforms.0001_initial... OK
+  Applying workspaces.0001_initial... OK
+  Applying projects.0001_initial... OK
+  Applying visitors.0001_initial... OK
+  Applying conversations.0001_initial... OK
+  Applying conversations.0002_conversation_category_conversation_closed_at_and_more... OK
+  Applying sessions.0001_initial... OK
+System check identified no issues (0 silenced).
+
+
+--- STDERR ---
+Creating test database for alias 'default' ('test_rastichat_db')...
+test_10_cross_workspace_operator_denied (conversations.tests_baseline.BaselineSecurityTests.test_10_cross_workspace_operator_denied) ... ok
+test_11_unauth_ws_rejected (conversations.tests_baseline.BaselineSecurityTests.test_11_unauth_ws_rejected) ... ok
+test_12_client_sender_id_ignored (conversations.tests_baseline.BaselineSecurityTests.test_12_client_sender_id_ignored) ... ok
+test_13_operator_cannot_impersonate (conversations.tests_baseline.BaselineSecurityTests.test_13_operator_cannot_impersonate) ... ok
+test_14_visitor_cannot_impersonate (conversations.tests_baseline.BaselineSecurityTests.test_14_visitor_cannot_impersonate) ... ok
+test_15_invalid_conv_uuid_handled (conversations.tests_baseline.BaselineSecurityTests.test_15_invalid_conv_uuid_handled) ... ok
+test_16_empty_message_rejected (conversations.tests_baseline.BaselineSecurityTests.test_16_empty_message_rejected) ... ok
+test_17_long_message_rejected (conversations.tests_baseline.BaselineSecurityTests.test_17_long_message_rejected) ... ok
+test_18_malformed_ws_json_handled (conversations.tests_baseline.BaselineSecurityTests.test_18_malformed_ws_json_handled) ... ok
+test_19_duplicate_idempotency (conversations.tests_baseline.BaselineSecurityTests.test_19_duplicate_idempotency) ... ok
+test_1_visitor_start_chat (conversations.tests_baseline.BaselineSecurityTests.test_1_visitor_start_chat) ... ok
+test_20_reconnect_no_duplicates (conversations.tests_baseline.BaselineSecurityTests.test_20_reconnect_no_duplicates) ... ok
+test_2_visitor_can_send_message (conversations.tests_baseline.BaselineSecurityTests.test_2_visitor_can_send_message) ... ok
+test_3_operator_receives_message (conversations.tests_baseline.BaselineSecurityTests.test_3_operator_receives_message) ... ok
+test_4_operator_can_reply (conversations.tests_baseline.BaselineSecurityTests.test_4_operator_can_reply) ... ok
+test_5_visitor_receives_reply (conversations.tests_baseline.BaselineSecurityTests.test_5_visitor_receives_reply) ... ok
+test_6_history_survives_refresh (conversations.tests_baseline.BaselineSecurityTests.test_6_history_survives_refresh) ... ok
+test_7_anonymous_visitor_rejected (conversations.tests_baseline.BaselineSecurityTests.test_7_anonymous_visitor_rejected) ... ok
+test_8_visitor_a_cannot_access_visitor_b (conversations.tests_baseline.BaselineSecurityTests.test_8_visitor_a_cannot_access_visitor_b) ... ok
+test_9_cross_project_ws_denied (conversations.tests_baseline.BaselineSecurityTests.test_9_cross_project_ws_denied) ... ok
+test_e2e_customer_chat_flow (conversations.tests_baseline.BaselineSecurityTests.test_e2e_customer_chat_flow) ... ok
+test_10_pl_support_can_reply (conversations.tests_support.SupportFlowTests.test_10_pl_support_can_reply) ... ok
+test_11_ws_admin_receives_reply (conversations.tests_support.SupportFlowTests.test_11_ws_admin_receives_reply) ... ok
+test_12_client_sender_id_ignored (conversations.tests_support.SupportFlowTests.test_12_client_sender_id_ignored) ... ok
+test_13_unauth_ws_rejected (conversations.tests_support.SupportFlowTests.test_13_unauth_ws_rejected) ... ok
+test_14_conv_uuid_insufficient (conversations.tests_support.SupportFlowTests.test_14_conv_uuid_insufficient) ... ok
+test_15_assignment_same_platform (conversations.tests_support.SupportFlowTests.test_15_assignment_same_platform) ... ok
+test_16_assignment_cross_platform_rejected (conversations.tests_support.SupportFlowTests.test_16_assignment_cross_platform_rejected) ... ok
+test_17_reassignment_preserves_history (conversations.tests_support.SupportFlowTests.test_17_reassignment_preserves_history) ... ok
+test_18_duplicate_idempotency (conversations.tests_support.SupportFlowTests.test_18_duplicate_idempotency) ... ok
+test_19_empty_message_rejected (conversations.tests_support.SupportFlowTests.test_19_empty_message_rejected) ... ok
+test_1_ws_owner_can_create (conversations.tests_support.SupportFlowTests.test_1_ws_owner_can_create) ... ok
+test_20_oversized_message_rejected (conversations.tests_support.SupportFlowTests.test_20_oversized_message_rejected) ... ok
+test_21_malformed_json_handled (conversations.tests_support.SupportFlowTests.test_21_malformed_json_handled) ... ok
+test_22_history_pagination (conversations.tests_support.SupportFlowTests.test_22_history_pagination) ... ok
+test_23_read_state_updates (conversations.tests_support.SupportFlowTests.test_23_read_state_updates) ... ok
+test_24_invalid_transition (conversations.tests_support.SupportFlowTests.test_24_invalid_transition) ... ok
+test_25_valid_transitions (conversations.tests_support.SupportFlowTests.test_25_valid_transitions) ... ok
+test_26_close (conversations.tests_support.SupportFlowTests.test_26_close) ... ok
+test_27_reopen (conversations.tests_support.SupportFlowTests.test_27_reopen) ... ok
+test_28_audit_events (conversations.tests_support.SupportFlowTests.test_28_audit_events) ... ok
+test_2_ws_admin_can_create (conversations.tests_support.SupportFlowTests.test_2_ws_admin_can_create) ... ok
+test_3_ws_operator_denied (conversations.tests_support.SupportFlowTests.test_3_ws_operator_denied) ... ok
+test_4_pl_support_sees_conversation (conversations.tests_support.SupportFlowTests.test_4_pl_support_sees_conversation) ... ok
+test_5_pl_support_cannot_see_other_platform (conversations.tests_support.SupportFlowTests.test_5_pl_support_cannot_see_other_platform) ... ok
+test_6_ws_admin_cannot_see_other_ws (conversations.tests_support.SupportFlowTests.test_6_ws_admin_cannot_see_other_ws) ... ok
+test_7_pl_support_cannot_access_customer (conversations.tests_support.SupportFlowTests.test_7_pl_support_cannot_access_customer) ... ok
+test_8_ws_admin_can_send (conversations.tests_support.SupportFlowTests.test_8_ws_admin_can_send) ... ok
+test_9_pl_support_receives (conversations.tests_support.SupportFlowTests.test_9_pl_support_receives) ... ok
+test_e2e_support_flow (conversations.tests_support.SupportFlowTests.test_e2e_support_flow) ... ok
+
+----------------------------------------------------------------------
+Ran 50 tests in 100.676s
+
+OK
+Destroying test database for alias 'default' ('test_rastichat_db')...
+

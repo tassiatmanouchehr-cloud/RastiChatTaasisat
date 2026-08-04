@@ -1,0 +1,10 @@
+Timestamp: 2026-08-01 23:32:07.706157
+Command: npx tsc --noEmit
+Working Dir: D:\Projects\Rastichat\1\apps\operator-dashboard
+Exit Code: 0
+
+--- STDOUT ---
+
+
+--- STDERR ---
+

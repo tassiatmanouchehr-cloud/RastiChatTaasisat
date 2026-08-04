@@ -1,0 +1,37 @@
+Timestamp: 2026-08-01 23:32:25.408841
+Command: npm run build
+Working Dir: D:\Projects\Rastichat\1\apps\operator-dashboard
+Exit Code: 0
+
+--- STDOUT ---
+
+> operator-dashboard@0.1.0 build
+> next build
+
+â–² Next.js 16.2.12 (Turbopack)
+- Environments: .env.local
+
+  Creating an optimized production build ...
+âœ“ Compiled successfully in 4.6s
+  Running TypeScript ...
+  Finished TypeScript in 4.2s ...
+  Collecting page data using 6 workers ...
+  Generating static pages using 6 workers (0/5) ...
+  Generating static pages using 6 workers (1/5) 
+  Generating static pages using 6 workers (2/5) 
+  Generating static pages using 6 workers (3/5) 
+âœ“ Generating static pages using 6 workers (5/5) in 1748ms
+  Finalizing page optimization ...
+
+Route (app)
+â”Œ â—‹ /
+â”œ â—‹ /_not-found
+â”” â—‹ /login
+
+
+â—‹  (Static)  prerendered as static content
+
+
+
+--- STDERR ---
+

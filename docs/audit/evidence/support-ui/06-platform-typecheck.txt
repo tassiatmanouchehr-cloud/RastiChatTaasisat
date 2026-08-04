@@ -1,0 +1,14 @@
+Timestamp: 2026-08-02 10:58:28.090313
+Command: npm run typecheck
+Working Dir: D:\Projects\Rastichat\1\apps\platform-dashboard
+Exit Code: 0
+
+--- STDOUT ---
+
+> platform-dashboard@0.1.0 typecheck
+> tsc --noEmit
+
+
+
+--- STDERR ---
+

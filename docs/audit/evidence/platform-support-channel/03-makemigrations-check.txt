@@ -1,0 +1,11 @@
+Timestamp: 2026-08-02 08:31:20.853367
+Command: docker-compose exec -T backend python manage.py makemigrations
+Working Dir: D:\Projects\Rastichat\1
+Exit Code: 0
+
+--- STDOUT ---
+No changes detected
+
+
+--- STDERR ---
+
