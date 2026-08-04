@@ -16,6 +16,10 @@ export default defineConfig({
       // match what's pre-installed in this sandbox; point at it explicitly
       // rather than downloading a second copy.
       executablePath: '/opt/pw-browsers/chromium',
+      // Voice-message scenarios call getUserMedia({ audio: true }); these flags
+      // give Chromium a synthetic audio device and auto-accept the permission
+      // prompt instead of hanging on a real (nonexistent, in CI) microphone.
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
     },
   },
   projects: [
