@@ -56,7 +56,10 @@ const convClosed = {
   visitor: { id: 'v3', name: 'رضا کریمی', email: null, mobile: null, created_at: '2024-01-01T00:00:00Z' }, last_message: null,
 };
 
-const product = { id: 'p1', brand: 'Arom', name: 'Candle', price: '890000', old_price: null, rating: '5', reviews_count: 12, image: '' };
+const product = {
+  id: 'p1', brand: 'Arom', name: 'Candle', price: '890000', old_price: '1120000', currency: 'IRT', discount_percent: 21,
+  rating: '5', reviews_count: 12, image: '', product_url: '', is_available: true,
+};
 
 function setDefaultMocks() {
   vi.mocked(fetchConversations).mockResolvedValue([convA, convB]);
@@ -176,6 +179,29 @@ describe('Operator dashboard — customer conversations page', () => {
     fireEvent.click(await screen.findByTitle('معرفی محصول'));
     fireEvent.click(await screen.findByText('Candle'));
     await waitFor(() => expect(shareProduct).toHaveBeenCalledWith('c1', 'p1', expect.any(String)));
+  });
+
+  it('shows the discount badge for a discounted product and re-searches the catalog as the operator types', async () => {
+    render(<DashboardPage />);
+    await selectConversation('سارا محمدی');
+    fireEvent.click(await screen.findByTitle('معرفی محصول'));
+    await screen.findByText('Candle');
+    expect(screen.getByText('٪21-')).toBeDefined();
+
+    fireEvent.change(screen.getByPlaceholderText('جستجوی محصول یا برند…'), { target: { value: 'Vase' } });
+    await waitFor(() => expect(fetchProducts).toHaveBeenLastCalledWith('Vase'), { timeout: 1000 });
+  });
+
+  it('disables sharing an out-of-stock product', async () => {
+    vi.mocked(fetchProducts).mockResolvedValue([{ ...product, is_available: false }]);
+    render(<DashboardPage />);
+    await selectConversation('سارا محمدی');
+    fireEvent.click(await screen.findByTitle('معرفی محصول'));
+    await screen.findByText('ناموجود');
+    const productBtn = screen.getByText('Candle').closest('button') as HTMLButtonElement;
+    expect(productBtn.disabled).toBe(true);
+    fireEvent.click(productBtn);
+    expect(shareProduct).not.toHaveBeenCalled();
   });
 
   it('uploads an image attachment via the file input', async () => {

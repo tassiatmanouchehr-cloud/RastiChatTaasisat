@@ -37,7 +37,10 @@ interface Message {
     id: string; sender_type: string; content: string; message_type: string; metadata: MessageMetadata;
     attachment_url: string | null; client_message_id: string; created_at: string; seen: boolean;
 }
-interface Product { id: string; brand: string; name: string; price: string; old_price: string | null; rating: string; reviews_count: number; image: string; }
+interface Product {
+    id: string; brand: string; name: string; price: string; old_price: string | null; currency: string;
+    discount_percent: number; rating: string; reviews_count: number; image: string; product_url: string; is_available: boolean;
+}
 type WsPayload =
     | { type: 'typing'; sender_type: string }
     | { type: 'message.seen'; reader: string }
@@ -294,6 +297,7 @@ export default function DashboardPage() {
     const [showEmoji, setShowEmoji] = useState(false);
     const [showProducts, setShowProducts] = useState(false);
     const [products, setProducts] = useState<Product[]>([]);
+    const [productSearch, setProductSearch] = useState('');
     const [categoryDraft, setCategoryDraft] = useState('');
     const [recording, setRecording] = useState(false);
     const [recordDuration, setRecordDuration] = useState(0);
@@ -328,6 +332,14 @@ export default function DashboardPage() {
     }, []);
 
     useEffect(() => { messagesEndRef.current?.scrollIntoView({ block: 'end' }); }, [messages, visitorTyping]);
+
+    useEffect(() => {
+        if (!showProducts) return;
+        const t = window.setTimeout(() => {
+            fetchProducts(productSearch).then(setProducts).catch(() => {});
+        }, 250);
+        return () => window.clearTimeout(t);
+    }, [productSearch, showProducts]);
 
     const selectedConvId = useRef<string | null>(null);
 
@@ -682,15 +694,27 @@ export default function DashboardPage() {
                                 </div>
                             )}
                             {showProducts && (
-                                <div className="absolute bottom-16 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-80 max-h-72 overflow-y-auto z-10">
+                                <div className="absolute bottom-16 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-80 max-h-80 overflow-y-auto z-10">
                                     <div className="text-xs font-bold text-gray-500 px-1 pb-2">معرفی محصول در گفتگو</div>
-                                    {products.length === 0 && <div className="text-xs text-gray-400 px-1 py-2">محصولی ثبت نشده است</div>}
+                                    <input
+                                        value={productSearch} onChange={(e) => setProductSearch(e.target.value)} autoFocus
+                                        placeholder="جستجوی محصول یا برند…"
+                                        className="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 mb-2 outline-none focus:border-terracotta"
+                                    />
+                                    {products.length === 0 && <div className="text-xs text-gray-400 px-1 py-2">محصولی یافت نشد</div>}
                                     {products.map(p => (
-                                        <button key={p.id} onClick={() => handleShareProduct(p)} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-gray-50 text-right">
+                                        <button key={p.id} onClick={() => handleShareProduct(p)} disabled={!p.is_available} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-gray-50 text-right disabled:opacity-50 disabled:cursor-not-allowed">
                                             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-gold to-terracotta-2 flex-none flex items-center justify-center text-white text-xs font-bold bg-cover bg-center" style={p.image ? { backgroundImage: `url(${p.image})` } : {}}>{!p.image && initials(p.brand || p.name)}</div>
                                             <div className="min-w-0 flex-1">
-                                                <div className="text-xs font-semibold truncate">{p.name}</div>
-                                                <div className="text-[11px] text-gray-400">{Number(p.price).toLocaleString('fa-IR')} تومان</div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="text-xs font-semibold truncate">{p.name}</span>
+                                                    {p.discount_percent > 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-success-soft text-success flex-none">٪{p.discount_percent}-</span>}
+                                                </div>
+                                                <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                                                    <span>{Number(p.price).toLocaleString('fa-IR')} {p.currency === 'IRT' ? 'تومان' : p.currency}</span>
+                                                    {p.old_price && <span className="line-through">{Number(p.old_price).toLocaleString('fa-IR')}</span>}
+                                                </div>
+                                                {!p.is_available && <div className="text-[10px] text-red-500 mt-0.5">ناموجود</div>}
                                             </div>
                                         </button>
                                     ))}
