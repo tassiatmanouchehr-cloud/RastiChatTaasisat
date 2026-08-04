@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'visitors',
     'conversations',
     'catalog',
+    'customer_context',
     'audit',
     'common',
 ]
