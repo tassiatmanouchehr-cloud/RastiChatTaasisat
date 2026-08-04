@@ -157,7 +157,7 @@ test.describe('Team operations, queues and SLA', () => {
 
     await expect(op2.getByTitle('اعلان‌ها').locator('span')).toBeVisible({ timeout: 15000 });
     await op2.getByTitle('اعلان‌ها').click();
-    await expect(op2.getByText('در یک یادداشت داخلی به شما اشاره شد')).toBeVisible();
+    await expect(op2.getByText('در یک یادداشت داخلی به شما اشاره شد').first()).toBeVisible();
 
     await customerCtx.close();
     await op1Ctx.close();
@@ -411,7 +411,10 @@ Notification.objects.create(recipient=user_b, workspace=ws_b, event_type='MENTIO
 
     const replyText = uniqueText('پاسخ پشتیبانی پلتفرم');
     await support.locator('input[placeholder="پاسخ..."]').fill(replyText);
-    await support.getByText('ارسال', { exact: true }).click();
+    // force: true — the Next.js dev-mode tooling overlay portal sits over
+    // this bottom-of-viewport button and intercepts pointer events even
+    // though the button itself is visible/enabled/stable.
+    await support.getByText('ارسال', { exact: true }).click({ force: true });
     await expect(support.getByText(replyText)).toBeVisible({ timeout: 10000 });
 
     await adminCtx.close();
