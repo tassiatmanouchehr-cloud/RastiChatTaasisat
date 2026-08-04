@@ -159,3 +159,24 @@ class CustomerContextIsolationTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.other_token}')
         res = self.client.get(f'/api/v1/conversations/customer/{self.conv.id}/customer-context/')
         self.assertEqual(res.status_code, 404)
+
+    def test_score_falls_back_to_live_conversation_rating_average_when_no_profile_score(self):
+        # No CustomerProfile at all for this visitor.
+        self.conv.rating = 4
+        self.conv.save(update_fields=['rating'])
+        second_conv = Conversation.objects.create(
+            visitor=self.visitor, workspace=self.workspace, type=Conversation.Type.CUSTOMER,
+            status=Conversation.Status.CLOSED, rating=5,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        res = self.client.get(f'/api/v1/conversations/customer/{self.conv.id}/customer-context/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(Decimal(str(res.data['score'])), Decimal('4.5'))
+
+    def test_manual_profile_score_overrides_the_computed_average(self):
+        CustomerProfile.objects.create(visitor=self.visitor, workspace=self.workspace, score=Decimal('3.0'))
+        self.conv.rating = 5
+        self.conv.save(update_fields=['rating'])
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        res = self.client.get(f'/api/v1/conversations/customer/{self.conv.id}/customer-context/')
+        self.assertEqual(Decimal(str(res.data['score'])), Decimal('3.0'))

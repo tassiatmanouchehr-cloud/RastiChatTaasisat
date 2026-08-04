@@ -63,10 +63,11 @@ export const markConversationRead = async (convId: string) => {
     if (!res.ok) throw new Error('Failed to mark read');
 };
 
-export const assignConversation = async (convId: string) => {
+export const assignConversation = async (convId: string, operatorId?: string) => {
     const res = await fetch(`${API_BASE}/conversations/customer/${convId}/assign/`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${getToken()}` },
+        headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(operatorId ? { operator_id: operatorId } : {}),
     });
     if (!res.ok) throw new Error('Failed to assign conversation');
     return res.json();
@@ -78,6 +79,23 @@ export const closeConversation = async (convId: string) => {
         headers: { 'Authorization': `Bearer ${getToken()}` },
     });
     if (!res.ok) throw new Error('Failed to close conversation');
+    return res.json();
+};
+
+export const reopenConversation = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/reopen/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to reopen conversation');
+    return res.json();
+};
+
+export const fetchTeammates = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/teammates/`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to fetch teammates');
     return res.json();
 };
 
@@ -115,8 +133,9 @@ export const requestRating = async (convId: string) => {
     return res.json();
 };
 
-export const fetchProducts = async () => {
-    const res = await fetch(`${API_BASE}/products/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+export const fetchProducts = async (search?: string) => {
+    const qs = search?.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
+    const res = await fetch(`${API_BASE}/products/${qs}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
     if (!res.ok) throw new Error('Failed to fetch products');
     return res.json();
 };
@@ -189,19 +208,18 @@ export const sendMarkReadEvent = (ws: WebSocket | null) => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'mark_read' }));
 };
 
-export const connectWebSocket = (convId: string, onMessage: (data: any) => void) => {
+export const connectWebSocket = <T,>(convId: string, onMessage: (data: T) => void) => {
     const token = getToken();
     console.log("Connecting to WS:", `${WS_BASE}/dashboard/${token}/${convId}/`);
     const ws = new WebSocket(`${WS_BASE}/dashboard/${token}/${convId}/`);
-    
+
     ws.onopen = () => console.log("✅ Dashboard WS Connected");
     ws.onclose = (event) => console.log("❌ Dashboard WS Closed", event.code, event.reason);
     ws.onerror = (error) => console.log("⚠️ Dashboard WS Error", error);
-    
+
     ws.onmessage = (event) => {
         console.log("📩 Dashboard WS Message", event.data);
-        const data = JSON.parse(event.data);
-        onMessage(data);
+        onMessage(JSON.parse(event.data) as T);
     };
     return ws;
 };

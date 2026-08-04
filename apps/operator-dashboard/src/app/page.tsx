@@ -2,8 +2,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
     fetchConversations, fetchMessages, sendMessage, connectWebSocket,
-    patchConversation, markConversationRead, assignConversation, closeConversation,
-    uploadAttachment, shareProduct, requestRating, fetchProducts,
+    patchConversation, markConversationRead, assignConversation, closeConversation, reopenConversation,
+    fetchTeammates, uploadAttachment, shareProduct, requestRating, fetchProducts,
     sendTypingEvent, sendMarkReadEvent,
     fetchTags, fetchConversationTags, attachConversationTag, detachConversationTag,
     fetchConversationNotes, createConversationNote, fetchCustomerContext,
@@ -12,9 +12,11 @@ import { useRouter } from 'next/navigation';
 
 interface Visitor { id: string; name: string | null; email: string | null; mobile: string | null; created_at: string; }
 interface LastMessage { content: string; message_type: string; sender_type: string; created_at: string; }
+interface Teammate { id: string; display_name: string; email: string; }
 interface Conversation {
     id: string; status: string; subject: string; category: string; notes: string; rating: number | null;
-    created_at: string; updated_at: string; unread_count: number; visitor: Visitor | null; last_message: LastMessage | null;
+    created_at: string; updated_at: string; closed_at: string | null; unread_count: number;
+    visitor: Visitor | null; last_message: LastMessage | null; assigned_to: Teammate | null;
 }
 interface Tag { id: string; name: string; color: string; }
 interface Note { id: string; body: string; created_by_email: string | null; created_at: string; }
@@ -35,7 +37,10 @@ interface Message {
     id: string; sender_type: string; content: string; message_type: string; metadata: MessageMetadata;
     attachment_url: string | null; client_message_id: string; created_at: string; seen: boolean;
 }
-interface Product { id: string; brand: string; name: string; price: string; old_price: string | null; rating: string; reviews_count: number; image: string; }
+interface Product {
+    id: string; brand: string; name: string; price: string; old_price: string | null; currency: string;
+    discount_percent: number; rating: string; reviews_count: number; image: string; product_url: string; is_available: boolean;
+}
 type WsPayload =
     | { type: 'typing'; sender_type: string }
     | { type: 'message.seen'; reader: string }
@@ -287,13 +292,16 @@ export default function DashboardPage() {
     const [search, setSearch] = useState('');
     const [tab, setTab] = useState('ALL');
     const [error, setError] = useState('');
-    const [actionError, setActionError] = useState('');
+    const [toast, setToast] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
     const [visitorTyping, setVisitorTyping] = useState(false);
     const [showEmoji, setShowEmoji] = useState(false);
     const [showProducts, setShowProducts] = useState(false);
     const [products, setProducts] = useState<Product[]>([]);
+    const [productSearch, setProductSearch] = useState('');
     const [categoryDraft, setCategoryDraft] = useState('');
     const [recording, setRecording] = useState(false);
+    const [recordDuration, setRecordDuration] = useState(0);
+    const [uploading, setUploading] = useState(false);
     const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
     const [showMobileInfo, setShowMobileInfo] = useState(false);
     const [workspaceTags, setWorkspaceTags] = useState<Tag[]>([]);
@@ -301,6 +309,7 @@ export default function DashboardPage() {
     const [notes, setNotes] = useState<Note[]>([]);
     const [newNote, setNewNote] = useState('');
     const [customerContext, setCustomerContext] = useState<CustomerContext | null>(null);
+    const [teammates, setTeammates] = useState<Teammate[]>([]);
 
     const wsRef = useRef<WebSocket | null>(null);
     const renderedIds = useRef<Set<string>>(new Set());
@@ -310,7 +319,9 @@ export default function DashboardPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const recordedChunksRef = useRef<BlobPart[]>([]);
+    const recordCancelledRef = useRef(false);
     const recordStartedAt = useRef(0);
+    const recordTimerRef = useRef<number | undefined>(undefined);
     const router = useRouter();
 
     useEffect(() => {
@@ -321,6 +332,14 @@ export default function DashboardPage() {
     }, []);
 
     useEffect(() => { messagesEndRef.current?.scrollIntoView({ block: 'end' }); }, [messages, visitorTyping]);
+
+    useEffect(() => {
+        if (!showProducts) return;
+        const t = window.setTimeout(() => {
+            fetchProducts(productSearch).then(setProducts).catch(() => {});
+        }, 250);
+        return () => window.clearTimeout(t);
+    }, [productSearch, showProducts]);
 
     const selectedConvId = useRef<string | null>(null);
 
@@ -381,14 +400,15 @@ export default function DashboardPage() {
         fetchConversationTags(conv.id).then(setConversationTags).catch(() => setConversationTags([]));
         fetchConversationNotes(conv.id).then(setNotes).catch(() => setNotes([]));
         fetchCustomerContext(conv.id).then(setCustomerContext).catch(() => setCustomerContext(null));
+        fetchTeammates(conv.id).then(setTeammates).catch(() => setTeammates([]));
         setConversations(prev => prev.map(c => c.id === conv.id ? { ...c, unread_count: 0 } : c));
     };
 
-    const actionErrorTimer = useRef<number | undefined>(undefined);
-    const notifyActionError = (message: string) => {
-        setActionError(message);
-        window.clearTimeout(actionErrorTimer.current);
-        actionErrorTimer.current = window.setTimeout(() => setActionError(''), 4000);
+    const toastTimer = useRef<number | undefined>(undefined);
+    const notify = (type: 'error' | 'success', message: string) => {
+        setToast({ type, message });
+        window.clearTimeout(toastTimer.current);
+        toastTimer.current = window.setTimeout(() => setToast(null), 4000);
     };
 
     const handleSend = async (text?: string) => {
@@ -401,7 +421,7 @@ export default function DashboardPage() {
         try {
             await sendMessage(selectedConv.id, content, clientId);
         } catch {
-            notifyActionError('ارسال پیام ناموفق بود');
+            notify('error', 'ارسال پیام ناموفق بود');
         }
     };
 
@@ -414,10 +434,11 @@ export default function DashboardPage() {
     const handleAttach = async (file: File) => {
         if (!selectedConv) return;
         const clientId = genClientId();
+        setUploading(true);
         try {
             const msg = await uploadAttachment(selectedConv.id, file, 'IMAGE', clientId);
             addIfNew(msg);
-        } catch { notifyActionError('آپلود عکس ناموفق بود'); }
+        } catch { notify('error', 'آپلود عکس ناموفق بود'); } finally { setUploading(false); }
     };
 
     const handleShareProduct = async (p: Product) => {
@@ -427,7 +448,7 @@ export default function DashboardPage() {
             const msg = await shareProduct(selectedConv.id, p.id, clientId);
             addIfNew(msg);
             setShowProducts(false);
-        } catch { notifyActionError('ارسال محصول ناموفق بود'); }
+        } catch { notify('error', 'ارسال محصول ناموفق بود'); }
     };
 
     const handleRequestRating = async () => {
@@ -435,7 +456,7 @@ export default function DashboardPage() {
         try {
             const msg = await requestRating(selectedConv.id);
             addIfNew(msg);
-        } catch { notifyActionError('درخواست امتیاز ناموفق بود (شاید قبلاً ارسال شده)'); }
+        } catch { notify('error', 'درخواست امتیاز ناموفق بود (شاید قبلاً ارسال شده)'); }
     };
 
     const handleToggleRecording = async () => {
@@ -446,27 +467,42 @@ export default function DashboardPage() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             recordedChunksRef.current = [];
+            recordCancelledRef.current = false;
             const rec = new MediaRecorder(stream);
             recordStartedAt.current = nowMs();
             rec.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
             rec.onstop = async () => {
                 stream.getTracks().forEach(t => t.stop());
                 setRecording(false);
+                setRecordDuration(0);
+                window.clearInterval(recordTimerRef.current);
+                if (recordCancelledRef.current) return;
                 const duration = (nowMs() - recordStartedAt.current) / 1000;
                 if (duration < 0.6 || !selectedConv) return;
                 const blob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
                 const file = new File([blob], 'voice.webm', { type: 'audio/webm' });
                 const clientId = genClientId();
+                setUploading(true);
                 try {
                     const msg = await uploadAttachment(selectedConv.id, file, 'VOICE', clientId, { duration: String(Math.round(duration)) });
                     addIfNew(msg);
-                } catch { notifyActionError('ارسال پیام صوتی ناموفق بود'); }
+                } catch { notify('error', 'ارسال پیام صوتی ناموفق بود'); } finally { setUploading(false); }
             };
             rec.start();
             mediaRecorderRef.current = rec;
             setRecording(true);
+            recordTimerRef.current = window.setInterval(() => {
+                setRecordDuration(Math.round((nowMs() - recordStartedAt.current) / 1000));
+            }, 500);
         } catch {
-            alert('برای ارسال پیام صوتی، دسترسی به میکروفون لازم است.');
+            notify('error', 'برای ارسال پیام صوتی، دسترسی به میکروفون لازم است.');
+        }
+    };
+
+    const handleCancelRecording = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+            recordCancelledRef.current = true;
+            mediaRecorderRef.current.stop();
         }
     };
 
@@ -476,7 +512,15 @@ export default function DashboardPage() {
             const updated = await assignConversation(selectedConv.id);
             setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
             setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
-        } catch { notifyActionError('واگذاری گفتگو ناموفق بود'); }
+        } catch { notify('error', 'واگذاری گفتگو ناموفق بود'); }
+    };
+    const handleReassign = async (operatorId: string) => {
+        if (!selectedConv || !operatorId) return;
+        try {
+            const updated = await assignConversation(selectedConv.id, operatorId);
+            setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
+            setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+        } catch { notify('error', 'واگذاری گفتگو ناموفق بود'); }
     };
     const handleClose = async () => {
         if (!selectedConv) return;
@@ -484,7 +528,16 @@ export default function DashboardPage() {
             const updated = await closeConversation(selectedConv.id);
             setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
             setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
-        } catch { notifyActionError('پایان گفتگو ناموفق بود'); }
+        } catch { notify('error', 'پایان گفتگو ناموفق بود'); }
+    };
+    const handleReopen = async () => {
+        if (!selectedConv) return;
+        try {
+            const updated = await reopenConversation(selectedConv.id);
+            setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
+            setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+            notify('success', 'گفتگو دوباره باز شد');
+        } catch { notify('error', 'بازگشایی گفتگو ناموفق بود'); }
     };
     const handleCategoryBlur = async () => {
         if (!selectedConv || categoryDraft === selectedConv.category) return;
@@ -508,7 +561,7 @@ export default function DashboardPage() {
                 ? await detachConversationTag(selectedConv.id, tag.id)
                 : await attachConversationTag(selectedConv.id, tag.id);
             setConversationTags(updated);
-        } catch { notifyActionError('بروزرسانی برچسب ناموفق بود'); }
+        } catch { notify('error', 'بروزرسانی برچسب ناموفق بود'); }
     };
 
     const handleAddNote = async () => {
@@ -517,7 +570,7 @@ export default function DashboardPage() {
             const note = await createConversationNote(selectedConv.id, newNote.trim());
             setNotes(prev => [note, ...prev]);
             setNewNote('');
-        } catch { notifyActionError('ثبت یادداشت ناموفق بود'); }
+        } catch { notify('error', 'ثبت یادداشت ناموفق بود'); }
     };
 
     if (error) return <div className="p-4 text-red-500" dir="rtl">{error}</div>;
@@ -587,17 +640,30 @@ export default function DashboardPage() {
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 flex-none">
+                                <select
+                                    value={selectedConv.assigned_to?.id || ''}
+                                    onChange={(e) => handleReassign(e.target.value)}
+                                    className="text-xs font-semibold px-2 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 border-none outline-none max-w-[120px]"
+                                    title="واگذاری به همکار"
+                                >
+                                    <option value="">واگذار نشده</option>
+                                    {teammates.map(t => <option key={t.id} value={t.id}>{t.display_name}</option>)}
+                                </select>
                                 <button onClick={handleAssign} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700">واگذاری به من</button>
                                 <button onClick={handleRequestRating} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gold-soft hover:bg-gold-soft/70 text-terracotta-2 border border-gold-soft">⭐ درخواست امتیاز</button>
-                                <button onClick={handleClose} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600">پایان گفتگو</button>
+                                {selectedConv.status === 'CLOSED' ? (
+                                    <button onClick={handleReopen} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-success-soft hover:bg-success-soft/70 text-success">بازگشایی</button>
+                                ) : (
+                                    <button onClick={handleClose} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600">پایان گفتگو</button>
+                                )}
                                 <button onClick={() => setShowMobileInfo(true)} className="lg:hidden w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center flex-none" title="اطلاعات مشتری">ⓘ</button>
                             </div>
                         </div>
 
-                        {actionError && (
-                            <div className="mx-4 mt-2 text-xs bg-red-50 text-red-600 border border-red-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
-                                <span>{actionError}</span>
-                                <button onClick={() => setActionError('')} className="text-red-400 hover:text-red-600">✕</button>
+                        {toast && (
+                            <div className={`mx-4 mt-2 text-xs rounded-lg px-3 py-2 flex items-center justify-between gap-2 border ${toast.type === 'error' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-success-soft text-success border-success-soft'}`}>
+                                <span>{toast.message}</span>
+                                <button onClick={() => setToast(null)} className="opacity-60 hover:opacity-100">✕</button>
                             </div>
                         )}
 
@@ -628,21 +694,39 @@ export default function DashboardPage() {
                                 </div>
                             )}
                             {showProducts && (
-                                <div className="absolute bottom-16 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-80 max-h-72 overflow-y-auto z-10">
+                                <div className="absolute bottom-16 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-80 max-h-80 overflow-y-auto z-10">
                                     <div className="text-xs font-bold text-gray-500 px-1 pb-2">معرفی محصول در گفتگو</div>
-                                    {products.length === 0 && <div className="text-xs text-gray-400 px-1 py-2">محصولی ثبت نشده است</div>}
+                                    <input
+                                        value={productSearch} onChange={(e) => setProductSearch(e.target.value)} autoFocus
+                                        placeholder="جستجوی محصول یا برند…"
+                                        className="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 mb-2 outline-none focus:border-terracotta"
+                                    />
+                                    {products.length === 0 && <div className="text-xs text-gray-400 px-1 py-2">محصولی یافت نشد</div>}
                                     {products.map(p => (
-                                        <button key={p.id} onClick={() => handleShareProduct(p)} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-gray-50 text-right">
+                                        <button key={p.id} onClick={() => handleShareProduct(p)} disabled={!p.is_available} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-gray-50 text-right disabled:opacity-50 disabled:cursor-not-allowed">
                                             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-gold to-terracotta-2 flex-none flex items-center justify-center text-white text-xs font-bold bg-cover bg-center" style={p.image ? { backgroundImage: `url(${p.image})` } : {}}>{!p.image && initials(p.brand || p.name)}</div>
                                             <div className="min-w-0 flex-1">
-                                                <div className="text-xs font-semibold truncate">{p.name}</div>
-                                                <div className="text-[11px] text-gray-400">{Number(p.price).toLocaleString('fa-IR')} تومان</div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="text-xs font-semibold truncate">{p.name}</span>
+                                                    {p.discount_percent > 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-success-soft text-success flex-none">٪{p.discount_percent}-</span>}
+                                                </div>
+                                                <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                                                    <span>{Number(p.price).toLocaleString('fa-IR')} {p.currency === 'IRT' ? 'تومان' : p.currency}</span>
+                                                    {p.old_price && <span className="line-through">{Number(p.old_price).toLocaleString('fa-IR')}</span>}
+                                                </div>
+                                                {!p.is_available && <div className="text-[10px] text-red-500 mt-0.5">ناموجود</div>}
                                             </div>
                                         </button>
                                     ))}
                                 </div>
                             )}
 
+                            {uploading && (
+                                <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] text-gray-400">
+                                    <span className="w-2.5 h-2.5 rounded-full border-2 border-gray-200 border-t-terracotta animate-spin" />
+                                    <span>در حال ارسال…</span>
+                                </div>
+                            )}
                             <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-2 py-1.5 focus-within:border-terracotta">
                                 <button onClick={() => { setShowProducts(v => !v); setShowEmoji(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="معرفی محصول">🛍️</button>
                                 <button onClick={() => { setShowEmoji(v => !v); setShowProducts(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="ایموجی">🙂</button>
@@ -651,7 +735,12 @@ export default function DashboardPage() {
                                 <input type="text" value={input} onChange={(e) => handleInputChange(e.target.value)}
                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
                                        className="flex-1 bg-transparent outline-none text-sm px-1 min-w-0" placeholder="پاسخ به مشتری…" />
-                                <button onClick={handleToggleRecording} className={`w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white ${recording ? 'text-red-500 animate-pulse' : ''}`} title="پیام صوتی">🎤</button>
+                                {recording && (
+                                    <button onClick={handleCancelRecording} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white text-red-500" title="لغو ضبط">✕</button>
+                                )}
+                                <button onClick={handleToggleRecording} className={`w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white text-xs font-semibold ${recording ? 'text-red-500 animate-pulse' : ''}`} title="پیام صوتی">
+                                    {recording ? fmtDuration(recordDuration) : '🎤'}
+                                </button>
                                 <button onClick={() => handleSend()} className="w-9 h-9 rounded-lg bg-terracotta text-white flex items-center justify-center flex-none">➤</button>
                             </div>
                         </div>

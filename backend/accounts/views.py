@@ -3,7 +3,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
-from .serializers import UserSerializer
+from .serializers import UserSerializer, PresenceSerializer
+from .presence import touch_presence
 
 class LoginView(APIView):
     permission_classes = []
@@ -34,3 +35,19 @@ class LogoutView(APIView):
 class MeView(APIView):
     def get(self, request):
         return Response(UserSerializer(request.user).data)
+
+class PresenceView(APIView):
+    """Lets an operator explicitly set their own online/away/offline status
+    (e.g. the dashboard's status dropdown). Activity elsewhere (opening a
+    conversation) only refreshes the timestamp — it never silently flips an
+    operator who explicitly went offline back to online.
+    """
+    def post(self, request):
+        serializer = PresenceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        presence = touch_presence(request.user, explicit_status=serializer.validated_data['status'])
+        return Response({'status': presence.effective_status()})
+
+    def get(self, request):
+        presence = touch_presence(request.user)
+        return Response({'status': presence.effective_status()})

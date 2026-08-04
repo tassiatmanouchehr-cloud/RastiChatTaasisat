@@ -5,6 +5,7 @@ from conversations.views import (
     CustomerConversationViewSet, PlatformSupportViewSet, WorkspaceSupportViewSet,
     StartCustomerChatView, MessageListView, SendMessageView,
     WidgetMessageListView, WidgetMarkReadView, WidgetUploadView, WidgetRateConversationView,
+    WidgetBrandingView,
 )
 from catalog.views import ProductViewSet
 from customer_context.views import (
@@ -33,4 +34,5 @@ urlpatterns = [
     path('widget/conversations/<uuid:conv_id>/mark_read/', WidgetMarkReadView.as_view(), name='widget-mark-read'),
     path('widget/conversations/<uuid:conv_id>/upload/', WidgetUploadView.as_view(), name='widget-upload'),
     path('widget/conversations/<uuid:conv_id>/rate/', WidgetRateConversationView.as_view(), name='widget-rate'),
+    path('widget/conversations/<uuid:conv_id>/branding/', WidgetBrandingView.as_view(), name='widget-branding'),
 ]

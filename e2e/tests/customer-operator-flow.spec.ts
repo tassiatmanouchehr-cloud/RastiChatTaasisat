@@ -181,6 +181,143 @@ test.describe('Customer <-> operator core flows', () => {
     await ctxA.close();
     await ctxB.close();
   });
+
+  test('customer sends a voice message, operator hears/sees it', async ({ browser }) => {
+    const customerCtx = await browser.newContext({ permissions: ['microphone'] });
+    const operatorCtx = await browser.newContext();
+    const customer = await customerCtx.newPage();
+    const operator = await operatorCtx.newPage();
+
+    const marker = uniqueText('پیام قبل صدا');
+    await openWidget(customer);
+    await sendWidgetText(customer, marker);
+
+    await loginOperator(operator);
+    await openConversationByPreview(operator, marker);
+    await expect(operator.getByText(marker).last()).toBeVisible();
+
+    await customer.locator('#rasti-mic-btn').click();
+    await customer.waitForTimeout(1200); // must clear the 0.6s accidental-tap threshold
+    await customer.locator('#rasti-mic-btn').click();
+
+    await expect(customer.locator('.rasti-bubble.rasti-voice')).toBeVisible({ timeout: 10000 });
+    // The <audio> element has no `controls` attribute (a custom play button drives it),
+    // so it has a 0x0 box and never counts as Playwright-"visible" — assert it's attached
+    // with a real src instead, and that the custom play control renders.
+    await expect(operator.locator('audio[src]')).toHaveCount(1, { timeout: 10000 });
+    await expect(operator.getByText('▶').last()).toBeVisible();
+
+    await customerCtx.close();
+    await operatorCtx.close();
+  });
+
+  test('operator sends a voice message, customer hears/sees it', async ({ browser }) => {
+    const customerCtx = await browser.newContext();
+    const operatorCtx = await browser.newContext({ permissions: ['microphone'] });
+    const customer = await customerCtx.newPage();
+    const operator = await operatorCtx.newPage();
+
+    const marker = uniqueText('شروع گفتگو صدای اپراتور');
+    await openWidget(customer);
+    await sendWidgetText(customer, marker);
+
+    await loginOperator(operator);
+    await openConversationByPreview(operator, marker);
+
+    await operator.locator('button[title="پیام صوتی"]').click();
+    await operator.waitForTimeout(1200);
+    await operator.locator('button[title="پیام صوتی"]').click();
+
+    await expect(operator.locator('audio[src]')).toHaveCount(1, { timeout: 10000 });
+    await expect(customer.locator('.rasti-bubble.rasti-voice')).toBeVisible({ timeout: 10000 });
+    await expect(customer.locator('.rasti-vplay')).toBeVisible();
+
+    await customerCtx.close();
+    await operatorCtx.close();
+  });
+
+  test('operator inbox: search filters the conversation list', async ({ browser }) => {
+    const customerCtx = await browser.newContext();
+    const operatorCtx = await browser.newContext();
+    const customer = await customerCtx.newPage();
+    const operator = await operatorCtx.newPage();
+
+    const markerA = uniqueText('جستجوپذیر آ');
+    const markerB = uniqueText('جستجوپذیر ب');
+    await openWidget(customer);
+    await sendWidgetText(customer, markerA);
+
+    const customer2Ctx = await browser.newContext();
+    const customer2 = await customer2Ctx.newPage();
+    await openWidget(customer2);
+    await sendWidgetText(customer2, markerB);
+
+    await loginOperator(operator);
+    await operator.reload();
+    await operator.getByText(markerA, { exact: true }).first().waitFor({ timeout: 15000 });
+    await operator.getByText(markerB, { exact: true }).first().waitFor({ timeout: 15000 });
+
+    await operator.locator('input[placeholder="جستجوی مشتری یا گفتگو…"]').fill(markerA);
+    await expect(operator.getByText(markerA, { exact: true })).toBeVisible();
+    await expect(operator.getByText(markerB, { exact: true })).toHaveCount(0);
+
+    await customerCtx.close();
+    await customer2Ctx.close();
+    await operatorCtx.close();
+  });
+
+  test('operator can assign a conversation to themselves and reassign it to a teammate', async ({ browser }) => {
+    const customerCtx = await browser.newContext();
+    const operatorCtx = await browser.newContext();
+    const customer = await customerCtx.newPage();
+    const operator = await operatorCtx.newPage();
+
+    const marker = uniqueText('شروع گفتگو واگذاری');
+    await openWidget(customer);
+    await sendWidgetText(customer, marker);
+
+    await loginOperator(operator);
+    await openConversationByPreview(operator, marker);
+
+    const teammateSelect = operator.locator('select[title="واگذاری به همکار"]');
+    await expect(teammateSelect).toHaveValue('');
+
+    await operator.locator('button', { hasText: 'واگذاری به من' }).click();
+    await expect(teammateSelect.locator('option:checked')).toHaveText('operator');
+
+    const otherOption = teammateSelect.locator('option').filter({ hasNotText: 'operator' }).filter({ hasNotText: 'واگذار نشده' });
+    const otherValue = await otherOption.first().getAttribute('value');
+    await teammateSelect.selectOption(otherValue!);
+    await expect(teammateSelect.locator('option:checked')).not.toHaveText('operator');
+
+    await customerCtx.close();
+    await operatorCtx.close();
+  });
+
+  test('operator can close and reopen a conversation', async ({ browser }) => {
+    const customerCtx = await browser.newContext();
+    const operatorCtx = await browser.newContext();
+    const customer = await customerCtx.newPage();
+    const operator = await operatorCtx.newPage();
+
+    const marker = uniqueText('شروع گفتگو پایان');
+    await openWidget(customer);
+    await sendWidgetText(customer, marker);
+
+    await loginOperator(operator);
+    await openConversationByPreview(operator, marker);
+
+    await operator.locator('button', { hasText: 'پایان گفتگو' }).click();
+    await expect(operator.getByText('بسته', { exact: true }).first()).toBeVisible();
+    const reopenBtn = operator.locator('button', { hasText: 'بازگشایی' });
+    await expect(reopenBtn).toBeVisible();
+
+    await reopenBtn.click();
+    await expect(operator.locator('button', { hasText: 'پایان گفتگو' })).toBeVisible();
+
+    await customerCtx.close();
+    await operatorCtx.close();
+  });
 });
 
 test.describe('Mobile responsive flows', () => {
