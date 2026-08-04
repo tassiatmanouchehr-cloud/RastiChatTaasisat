@@ -28,6 +28,21 @@ vi.mock('@/lib/api', () => ({
   fetchConversationNotes: vi.fn(),
   createConversationNote: vi.fn(),
   fetchCustomerContext: vi.fn(),
+  fetchTeams: vi.fn(),
+  fetchQueues: vi.fn(),
+  claimConversation: vi.fn(),
+  transferConversation: vi.fn(),
+  escalateConversation: vi.fn(),
+  setConversationPriority: vi.fn(),
+  fetchAssignmentHistory: vi.fn(),
+  createInternalNote: vi.fn(),
+  fetchQuickReplies: vi.fn(),
+  applyQuickReply: vi.fn(),
+  fetchNotifications: vi.fn(),
+  fetchUnreadNotificationCount: vi.fn(),
+  markNotificationRead: vi.fn(),
+  markAllNotificationsRead: vi.fn(),
+  connectNotificationsWebSocket: vi.fn(() => ({ close: vi.fn() })),
 }));
 
 import {
@@ -35,6 +50,9 @@ import {
   fetchProducts, fetchTags, fetchConversationTags, attachConversationTag,
   fetchConversationNotes, createConversationNote, fetchCustomerContext, markConversationRead,
   assignConversation, closeConversation, reopenConversation, fetchTeammates,
+  fetchTeams, fetchQueues, claimConversation, transferConversation, escalateConversation, setConversationPriority,
+  fetchAssignmentHistory, createInternalNote, fetchQuickReplies, applyQuickReply,
+  fetchNotifications, fetchUnreadNotificationCount, markNotificationRead, markAllNotificationsRead,
 } from '@/lib/api';
 
 const visitorA = { id: 'v1', name: 'سارا محمدی', email: null, mobile: '0912', created_at: '2024-01-01T00:00:00Z' };
@@ -44,11 +62,13 @@ const convA = {
   id: 'c1', status: 'OPEN', subject: '', category: '', notes: '', rating: null,
   created_at: '2024-01-01T10:00:00Z', updated_at: '2024-01-01T10:00:00Z', unread_count: 2,
   visitor: visitorA, last_message: { content: 'سلام دنیا', message_type: 'TEXT', sender_type: 'VISITOR', created_at: '2024-01-01T10:00:00Z' },
+  priority: 'NORMAL', queue: null, team: null, sla: null,
 };
 const convB = {
   id: 'c2', status: 'PENDING', subject: '', category: '', notes: '', rating: null,
   created_at: '2024-01-01T09:00:00Z', updated_at: '2024-01-01T09:00:00Z', unread_count: 0,
   visitor: visitorB, last_message: { content: 'ممنون', message_type: 'TEXT', sender_type: 'VISITOR', created_at: '2024-01-01T09:00:00Z' },
+  priority: 'NORMAL', queue: null, team: null, sla: null,
 };
 const convClosed = {
   id: 'c3', status: 'CLOSED', subject: '', category: '', notes: '', rating: null, closed_at: '2024-01-02T00:00:00Z',
@@ -74,6 +94,12 @@ function setDefaultMocks() {
   });
   vi.mocked(markConversationRead).mockResolvedValue(undefined);
   vi.mocked(fetchTeammates).mockResolvedValue([{ id: 'op1', display_name: 'همکار یک', email: 'op1@test.com' }]);
+  vi.mocked(fetchTeams).mockResolvedValue([{ id: 'team1', name: 'فروش', is_active: true }]);
+  vi.mocked(fetchQueues).mockResolvedValue([{ id: 'q1', name: 'صف فروش', team: 'team1', is_active: true }]);
+  vi.mocked(fetchAssignmentHistory).mockResolvedValue([]);
+  vi.mocked(fetchQuickReplies).mockResolvedValue([]);
+  vi.mocked(fetchNotifications).mockResolvedValue([]);
+  vi.mocked(fetchUnreadNotificationCount).mockResolvedValue({ count: 0 });
 }
 
 // jsdom doesn't implement scrollIntoView; the page calls it on every message-list update.
@@ -409,6 +435,141 @@ describe('Operator dashboard — customer conversations page', () => {
       fireEvent.click(await screen.findByTitle('پیام صوتی'));
       await screen.findByText('برای ارسال پیام صوتی، دسترسی به میکروفون لازم است.');
       expect(alertSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('team operations: queues, priority, transfer, escalation, notes, quick replies, notifications', () => {
+    it('filters the list by queue, team, priority, and unassigned/mine', async () => {
+      const convUrgent = {
+        ...convB, id: 'c4', priority: 'URGENT', queue: 'q1', team: 'team1',
+        visitor: { id: 'v4', name: 'نگار احمدی', email: null, mobile: null, created_at: '2024-01-01T00:00:00Z' },
+        assigned_to: null,
+      };
+      vi.mocked(fetchConversations).mockResolvedValue([convA, convB, convUrgent]);
+      render(<DashboardPage />);
+      await waitFor(() => expect(screen.getByText('سارا محمدی')).toBeDefined());
+      expect(screen.getByText('نگار احمدی')).toBeDefined();
+
+      fireEvent.click(screen.getByTitle('فیلترها'));
+      const priorityFilter = await screen.findByDisplayValue('همه اولویت‌ها');
+      fireEvent.change(priorityFilter, { target: { value: 'URGENT' } });
+      expect(screen.queryByText('سارا محمدی')).toBeNull();
+      expect(screen.getByText('نگار احمدی')).toBeDefined();
+    });
+
+    it('shows a claim button for an unassigned conversation and claims it', async () => {
+      const unassigned = { ...convA, assigned_to: null };
+      vi.mocked(fetchConversations).mockResolvedValue([unassigned, convB]);
+      vi.mocked(claimConversation).mockResolvedValue({ ...unassigned, assigned_to: { id: 'me', display_name: 'من', email: 'me@test.com' } });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      const claimBtn = await screen.findByText('برداشتن');
+      fireEvent.click(claimBtn);
+      await waitFor(() => expect(claimConversation).toHaveBeenCalledWith('c1'));
+    });
+
+    it('transfers the conversation to a different team', async () => {
+      vi.mocked(transferConversation).mockResolvedValue({ ...convA, team: 'team1', team_name: 'فروش', assigned_to: null });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByText('انتقال تیم'));
+      fireEvent.click(await screen.findByText('فروش'));
+      await waitFor(() => expect(transferConversation).toHaveBeenCalledWith('c1', 'team1'));
+    });
+
+    it('escalates the conversation to a supervisor', async () => {
+      vi.mocked(escalateConversation).mockResolvedValue({ ...convA, priority: 'URGENT' });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByTitle('تشدید به سرپرست'));
+      await waitFor(() => expect(escalateConversation).toHaveBeenCalledWith('c1'));
+    });
+
+    it('changes the conversation priority', async () => {
+      vi.mocked(setConversationPriority).mockResolvedValue({ ...convA, priority: 'HIGH' });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      const prioritySelect = await screen.findByTitle('اولویت');
+      fireEvent.change(prioritySelect, { target: { value: 'HIGH' } });
+      await waitFor(() => expect(setConversationPriority).toHaveBeenCalledWith('c1', 'HIGH'));
+    });
+
+    it('switches to internal-note mode and sends a note that never touches sendMessage', async () => {
+      vi.mocked(createInternalNote).mockResolvedValue({
+        id: 'n1', sender_type: 'USER', content: 'یادداشت مخفی', message_type: 'INTERNAL_NOTE', metadata: {},
+        attachment_url: null, client_message_id: 'gen', created_at: new Date().toISOString(), seen: true,
+      });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(screen.getByText('💬 پاسخ به مشتری (کلیک برای یادداشت داخلی)'));
+      const input = screen.getByPlaceholderText('یادداشت داخلی (فقط برای همکاران)…');
+      fireEvent.change(input, { target: { value: 'یادداشت مخفی' } });
+      fireEvent.click(screen.getByText('➤'));
+      await waitFor(() => expect(createInternalNote).toHaveBeenCalledWith('c1', 'یادداشت مخفی', expect.any(String), []));
+      expect(screen.getByText('🔒 یادداشت داخلی')).toBeDefined();
+    });
+
+    it('mentions a teammate while composing an internal note', async () => {
+      vi.mocked(createInternalNote).mockResolvedValue({
+        id: 'n2', sender_type: 'USER', content: 'note', message_type: 'INTERNAL_NOTE', metadata: {},
+        attachment_url: null, client_message_id: 'gen', created_at: new Date().toISOString(), seen: true,
+      });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(screen.getByText('💬 پاسخ به مشتری (کلیک برای یادداشت داخلی)'));
+      fireEvent.click(screen.getByTitle('اشاره به همکار'));
+      fireEvent.click(await screen.findByText('@همکار یک'));
+      expect(screen.getByText('@همکار یک', { selector: 'span' })).toBeDefined();
+
+      const input = screen.getByPlaceholderText('یادداشت داخلی (فقط برای همکاران)…');
+      fireEvent.change(input, { target: { value: 'note' } });
+      fireEvent.click(screen.getByText('➤'));
+      await waitFor(() => expect(createInternalNote).toHaveBeenCalledWith('c1', 'note', expect.any(String), ['op1']));
+    });
+
+    it('uses a managed quick reply to fill the composer', async () => {
+      vi.mocked(fetchQuickReplies).mockResolvedValue([{ id: 'qr1', scope: 'WORKSPACE', title: 'خوش‌آمد', body: 'سلام وقت بخیر', shortcut: '', category: '', usage_count: 3 }]);
+      vi.mocked(applyQuickReply).mockResolvedValue({ body: 'سلام وقت بخیر', usage_count: 4 });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByText('خوش‌آمد'));
+      await waitFor(() => expect(applyQuickReply).toHaveBeenCalledWith('qr1', 'c1'));
+      const input = screen.getByPlaceholderText('پاسخ به مشتری…') as HTMLInputElement;
+      await waitFor(() => expect(input.value).toContain('سلام وقت بخیر'));
+    });
+
+    it('shows unread notification count and marks a notification read', async () => {
+      vi.mocked(fetchNotifications).mockResolvedValue([
+        { id: 'notif1', event_type: 'CONVERSATION_ASSIGNED', title: 'گفتگویی واگذار شد', payload: {}, read_at: null, created_at: new Date().toISOString() },
+      ]);
+      vi.mocked(fetchUnreadNotificationCount).mockResolvedValue({ count: 1 });
+      render(<DashboardPage />);
+      await waitFor(() => expect(screen.getByText('1')).toBeDefined());
+      fireEvent.click(screen.getByTitle('اعلان‌ها'));
+      fireEvent.click(await screen.findByText('گفتگویی واگذار شد'));
+      await waitFor(() => expect(markNotificationRead).toHaveBeenCalledWith('notif1'));
+    });
+
+    it('marks all notifications read', async () => {
+      vi.mocked(fetchNotifications).mockResolvedValue([
+        { id: 'notif1', event_type: 'MENTIONED', title: 'اشاره شدید', payload: {}, read_at: null, created_at: new Date().toISOString() },
+      ]);
+      vi.mocked(fetchUnreadNotificationCount).mockResolvedValue({ count: 1 });
+      render(<DashboardPage />);
+      fireEvent.click(await screen.findByTitle('اعلان‌ها'));
+      fireEvent.click(await screen.findByText('علامت‌گذاری همه'));
+      await waitFor(() => expect(markAllNotificationsRead).toHaveBeenCalled());
+    });
+
+    it('shows the assignment history panel for the selected conversation', async () => {
+      vi.mocked(fetchAssignmentHistory).mockResolvedValue([
+        { id: 'h1', action: 'CLAIM', assigned_to_email: 'op1@test.com', assigned_by_email: null, previous_assignee_email: null, previous_team_name: null, new_team_name: null, reason: '', created_at: '2024-01-01T10:05:00Z' },
+      ]);
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      await waitFor(() => expect(fetchAssignmentHistory).toHaveBeenCalledWith('c1'));
+      expect(screen.getByText('برداشت از صف')).toBeDefined();
+      expect(screen.getByText(/op1@test.com/)).toBeDefined();
     });
   });
 });
