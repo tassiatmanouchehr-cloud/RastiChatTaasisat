@@ -201,7 +201,11 @@ test.describe('Customer <-> operator core flows', () => {
     await customer.locator('#rasti-mic-btn').click();
 
     await expect(customer.locator('.rasti-bubble.rasti-voice')).toBeVisible({ timeout: 10000 });
-    await expect(operator.locator('audio')).toBeVisible({ timeout: 10000 });
+    // The <audio> element has no `controls` attribute (a custom play button drives it),
+    // so it has a 0x0 box and never counts as Playwright-"visible" — assert it's attached
+    // with a real src instead, and that the custom play control renders.
+    await expect(operator.locator('audio[src]')).toHaveCount(1, { timeout: 10000 });
+    await expect(operator.getByText('▶').last()).toBeVisible();
 
     await customerCtx.close();
     await operatorCtx.close();
@@ -224,8 +228,9 @@ test.describe('Customer <-> operator core flows', () => {
     await operator.waitForTimeout(1200);
     await operator.locator('button[title="پیام صوتی"]').click();
 
-    await expect(operator.locator('audio')).toBeVisible({ timeout: 10000 });
+    await expect(operator.locator('audio[src]')).toHaveCount(1, { timeout: 10000 });
     await expect(customer.locator('.rasti-bubble.rasti-voice')).toBeVisible({ timeout: 10000 });
+    await expect(customer.locator('.rasti-vplay')).toBeVisible();
 
     await customerCtx.close();
     await operatorCtx.close();
