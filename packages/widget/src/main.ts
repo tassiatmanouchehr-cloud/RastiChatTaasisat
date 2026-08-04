@@ -1,3 +1,11 @@
+export {};
+
+declare global {
+    interface Window {
+        RastiChat: { init: (config: RastiChatConfig) => void };
+    }
+}
+
 interface RastiChatConfig {
     projectKey: string;
     position?: 'left' | 'right';
@@ -8,13 +16,25 @@ interface RastiChatConfig {
     wsBase?: string;
 }
 
+interface MessageMetadata {
+    caption?: string;
+    duration?: string | number;
+    brand?: string;
+    name?: string;
+    price?: string | number;
+    old_price?: string | number | null;
+    rating?: string | number;
+    reviews_count?: number;
+    image?: string;
+}
+
 interface WireMessage {
     type?: string;
     id?: string;
     sender_type?: 'VISITOR' | 'USER' | 'SYSTEM';
     content?: string;
     message_type?: string;
-    metadata?: Record<string, any>;
+    metadata?: MessageMetadata;
     attachment_url?: string | null;
     client_message_id?: string;
     created_at?: string;
