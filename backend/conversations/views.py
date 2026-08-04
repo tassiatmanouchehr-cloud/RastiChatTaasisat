@@ -1,16 +1,21 @@
 import json
+from django.db import models
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.throttling import ScopedRateThrottle
-from .models import Conversation, Message, MessageReceipt, Assignment
-from .serializers import ConversationSerializer, MessageSerializer
+from .models import Conversation, Message, MessageReceipt, Assignment, PriorityChange
+from .serializers import ConversationSerializer, MessageSerializer, AssignmentSerializer
 from .media_validation import validate_and_normalize_upload, UploadValidationError
-from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent
+from . import services as conv_services
+from common.pagination import StandardPagination
+from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent, IsSupervisorOrAdmin
+from common.tenancy import resolve_operator_workspace
 from visitors.models import Visitor, VisitorSession
 from catalog.models import Product
+from teams.models import TeamMembership
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
@@ -20,6 +25,10 @@ from audit.models import AuditEvent
 from .branding import build_widget_branding
 
 User = get_user_model()
+
+
+def _service_error_response(exc):
+    return Response({'error': exc.message}, status=exc.status_code)
 
 
 def _broadcast(conv_id, message_data, group_prefix='chat'):
@@ -47,11 +56,45 @@ def _broadcast_branding(conv):
 class CustomerConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
     permission_classes = [IsWorkspaceOperator]
+    pagination_class = None  # existing frontends depend on the plain-array shape; unchanged from earlier stages
     throttle_scope = 'media_upload'  # only consulted by the `upload` action's ScopedRateThrottle
+
     def get_queryset(self):
-        return Conversation.objects.filter(workspace__memberships__user=self.request.user, type=Conversation.Type.CUSTOMER)
+        qs = Conversation.objects.filter(workspace__memberships__user=self.request.user, type=Conversation.Type.CUSTOMER)
+        params = self.request.query_params
+        if params.get('queue'):
+            qs = qs.filter(queue_id=params['queue'])
+        if params.get('team'):
+            qs = qs.filter(team_id=params['team'])
+        if params.get('priority'):
+            qs = qs.filter(priority=params['priority'])
+        if params.get('assignee'):
+            qs = qs.filter(assigned_to_id=params['assignee'])
+        if params.get('unassigned') in ('1', 'true', 'True'):
+            qs = qs.filter(assigned_to__isnull=True)
+        if params.get('mine') in ('1', 'true', 'True'):
+            qs = qs.filter(assigned_to=self.request.user)
+        sla_status = params.get('sla_status')
+        if sla_status == 'breached':
+            qs = qs.filter(sla__isnull=False).filter(
+                models.Q(sla__first_response_breached_at__isnull=False)
+                | models.Q(sla__next_response_breached_at__isnull=False)
+                | models.Q(sla__resolution_breached_at__isnull=False)
+            )
+        elif sla_status == 'approaching':
+            qs = qs.filter(sla__isnull=False).filter(
+                models.Q(sla__first_response_approaching_notified_at__isnull=False, sla__first_responded_at__isnull=True)
+                | models.Q(sla__next_response_approaching_notified_at__isnull=False)
+                | models.Q(sla__resolution_approaching_notified_at__isnull=False, sla__resolved_at__isnull=True)
+            )
+        return qs.distinct()
+
     @action(detail=True, methods=['get'])
     def messages(self, request, pk=None):
+        # Internal notes are included here (operator-only view) so they render
+        # inline with the customer conversation, visually distinguished by
+        # message_type — they're excluded only from the visitor-facing
+        # WidgetMessageListView and from the customer-context summaries below.
         conv = self.get_object()
         msgs = conv.messages.all().order_by('created_at')
         return Response(MessageSerializer(msgs, many=True, context={'request': request}).data)
@@ -59,7 +102,7 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def mark_read(self, request, pk=None):
         conv = self.get_object()
-        for msg in conv.messages.exclude(receipts__user=request.user):
+        for msg in conv.messages.exclude(receipts__user=request.user).exclude(message_type=Message.MessageType.INTERNAL_NOTE):
             MessageReceipt.objects.create(message=msg, user=request.user)
         _broadcast_seen(conv.id, 'USER')
         return Response(status=200)
@@ -76,37 +119,146 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
         """
         conv = self.get_object()
         operator_id = request.data.get('operator_id')
-        if operator_id:
-            try:
-                target = User.objects.get(
-                    id=operator_id, workspace_memberships__workspace=conv.workspace,
-                )
-            except (User.DoesNotExist, DjangoValidationError, ValueError):
-                return Response({'error': 'Operator not found in this workspace'}, status=status.HTTP_404_NOT_FOUND)
-            conv.assigned_to = target
-        else:
-            conv.assigned_to = request.user
-        conv.status = Conversation.Status.OPEN
-        conv.save()
+        try:
+            if operator_id:
+                conv = conv_services.assign_to_agent(conv, request.user, operator_id)
+            else:
+                conv = conv_services.assign_to_self(conv, request.user)
+        except conv_services.ConversationServiceError as exc:
+            return _service_error_response(exc)
         _broadcast_branding(conv)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
+    def claim(self, request, pk=None):
+        """A human agent claims an unassigned conversation for themselves —
+        concurrency-safe: only the first of two simultaneous claimants wins.
+        """
+        from queues.services import claim_conversation, AssignmentError
+        conv = self.get_object()
+        try:
+            conv = claim_conversation(conv, request.user)
+        except AssignmentError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
+        _broadcast_branding(conv)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def transfer(self, request, pk=None):
+        """Transfer to a different team. The receiving team must claim/assign
+        explicitly — a transfer never silently keeps the old direct assignee.
+        """
+        conv = self.get_object()
+        team_id = request.data.get('team_id')
+        if not team_id:
+            return Response({'error': 'team_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            conv = conv_services.transfer_team(conv, request.user, team_id, reason=request.data.get('reason', ''))
+        except conv_services.ConversationServiceError as exc:
+            return _service_error_response(exc)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def unassign(self, request, pk=None):
+        conv = self.get_object()
+        conv = conv_services.unassign(conv, request.user, reason=request.data.get('reason', ''))
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def return_to_queue(self, request, pk=None):
+        conv = self.get_object()
+        conv = conv_services.return_to_queue(conv, request.user, reason=request.data.get('reason', ''))
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def escalate(self, request, pk=None):
+        conv = self.get_object()
+        conv = conv_services.escalate(conv, request.user, reason=request.data.get('reason', ''))
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def set_priority(self, request, pk=None):
+        conv = self.get_object()
+        priority = request.data.get('priority')
+        try:
+            conv = conv_services.set_priority(conv, request.user, priority, reason=request.data.get('reason', ''))
+        except conv_services.ConversationServiceError as exc:
+            return _service_error_response(exc)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['get'])
+    def assignment_history(self, request, pk=None):
+        conv = self.get_object()
+        history = conv.assignment_history.all()
+        return Response(AssignmentSerializer(history, many=True).data)
+
+    @action(detail=True, methods=['get', 'post'])
+    def internal_notes(self, request, pk=None):
+        """Operator-only collaboration notes — never delivered to the widget
+        (see `.services.broadcast_ops_event`, which only ever targets the
+        operator-only `chat_ops_<id>` group).
+        """
+        from collaboration.models import Mention
+        from collaboration.serializers import InternalNoteSerializer
+        from notifications.models import Notification
+
+        conv = self.get_object()
+        if request.method == 'GET':
+            notes = conv.messages.filter(message_type=Message.MessageType.INTERNAL_NOTE).order_by('created_at')
+            return Response(InternalNoteSerializer(notes, many=True, context={'request': request}).data)
+
+        body = (request.data.get('content') or '').strip()
+        if not body:
+            return Response({'error': 'Empty note'}, status=status.HTTP_400_BAD_REQUEST)
+        client_msg_id = request.data.get('client_message_id')
+        if not client_msg_id:
+            return Response({'error': 'Missing client_message_id'}, status=status.HTTP_400_BAD_REQUEST)
+        if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
+            return Response({'error': 'Duplicate message'}, status=status.HTTP_409_CONFLICT)
+
+        mentioned_ids = request.data.get('mentioned_user_ids') or []
+        eligible_mentions = list(User.objects.filter(id__in=mentioned_ids, workspace_memberships__workspace=conv.workspace).distinct())
+
+        note = Message.objects.create(
+            conversation=conv, sender=request.user, sender_type=Message.SenderType.USER,
+            content=body, client_message_id=client_msg_id, message_type=Message.MessageType.INTERNAL_NOTE,
+        )
+        for user in eligible_mentions:
+            Mention.objects.create(note=note, mentioned_user=user, created_by=request.user)
+            if user.id != request.user.id:
+                from notifications.services import notify
+                notify(
+                    user, conv.workspace, Notification.EventType.MENTIONED,
+                    'در یک یادداشت داخلی به شما اشاره شد', {'conversation_id': str(conv.id), 'note_id': str(note.id)},
+                )
+        AuditEvent.objects.create(
+            actor=request.user, action='internal_note_created', target_type='conversation', target_id=str(conv.id),
+            metadata={'mentioned_count': len(eligible_mentions)},
+        )
+        data = InternalNoteSerializer(note, context={'request': request}).data
+        conv_services.broadcast_ops_event(conv.id, 'conversation.internal_note_created', {'note': data})
+        return Response(data, status=201)
+
+    @action(detail=True, methods=['post'])
     def close(self, request, pk=None):
+        from sla.services import mark_resolved
         conv = self.get_object()
         conv.status = Conversation.Status.CLOSED
         conv.closed_at = timezone.now()
         conv.save()
+        mark_resolved(conv)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
     def reopen(self, request, pk=None):
+        from sla.services import mark_reopened
         conv = self.get_object()
         if conv.status != Conversation.Status.CLOSED:
             return Response({'error': 'Conversation is not closed'}, status=status.HTTP_400_BAD_REQUEST)
         conv.status = Conversation.Status.OPEN
         conv.closed_at = None
         conv.save()
+        mark_reopened(conv)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['get'])
@@ -209,6 +361,12 @@ class StartCustomerChatView(APIView):
             return Response({'error': 'Invalid session'}, status=status.HTTP_401_UNAUTHORIZED)
         conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
         if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
+        if created:
+            from queues.services import route_new_conversation
+            from sla.services import apply_sla
+            conv = route_new_conversation(conv)
+            apply_sla(conv)
+            conv_services.broadcast_ops_event(conv.id, 'conversation.queued', conv_services.conversation_summary(conv))
         data = ConversationSerializer(conv).data
         data['branding'] = build_widget_branding(conv)
         return Response(data, status=200)
@@ -238,6 +396,9 @@ class SendMessageView(APIView):
         if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
             return Response({'error': 'Duplicate message'}, status=status.HTTP_409_CONFLICT)
         msg = Message.objects.create(conversation=conv, sender=request.user, sender_type=Message.SenderType.USER, content=content, client_message_id=client_msg_id)
+        from sla.services import mark_first_response, clear_next_response
+        mark_first_response(conv)
+        clear_next_response(conv)
         data = MessageSerializer(msg, context={'request': request}).data
         _broadcast(conv_id, data)
         return Response(data, status=201)
@@ -257,7 +418,8 @@ class WidgetMessageListView(APIView):
             conv = _get_visitor_conversation(request.query_params.get('session_token'), conv_id)
         except (VisitorSession.DoesNotExist, Conversation.DoesNotExist, DjangoValidationError, ValueError):
             return Response(status=status.HTTP_404_NOT_FOUND)
-        msgs = conv.messages.all().order_by('created_at')
+        # Internal notes must never reach the visitor-facing widget.
+        msgs = conv.messages.exclude(message_type=Message.MessageType.INTERNAL_NOTE).order_by('created_at')
         return Response(MessageSerializer(msgs, many=True, context={'request': request}).data)
 
 class WidgetBrandingView(APIView):
@@ -448,6 +610,88 @@ class PlatformSupportViewSet(viewsets.ModelViewSet):
         msg = Message.objects.create(conversation=conv, sender=request.user, sender_type=Message.SenderType.USER, content=content, client_message_id=request.data['client_message_id'])
         conv.status = Conversation.Status.WAITING_FOR_WORKSPACE
         conv.save()
-        
+
         async_to_sync(get_channel_layer().group_send)(f"support_chat_{conv.id}", {'type': 'chat.message', 'message': {'id': str(msg.id), 'sender_type': 'USER', 'content': msg.content, 'created_at': msg.created_at.isoformat()}})
         return Response(MessageSerializer(msg).data, status=201)
+
+
+class OperationalSummaryView(APIView):
+    """Live operational snapshot for the supervisor dashboard: unassigned
+    work, per-queue/per-team/per-agent load, urgent/waiting counts, and SLA
+    health. Operational queries only — no analytics warehouse, no long-range
+    aggregation beyond the requested `hours` window for average first response.
+    """
+    permission_classes = [IsSupervisorOrAdmin]
+
+    def get(self, request):
+        from accounts.models import OperatorPresence
+        from teams.models import Team
+        from queues.models import Queue
+
+        workspace = resolve_operator_workspace(request.user, request.query_params.get('workspace_id'))
+        try:
+            hours = int(request.query_params.get('hours', 24))
+        except ValueError:
+            hours = 24
+        since = timezone.now() - timezone.timedelta(hours=hours)
+
+        base = Conversation.objects.filter(workspace=workspace, type=Conversation.Type.CUSTOMER)
+        active = base.filter(status__in=Conversation.ACTIVE_STATUSES)
+
+        unassigned_count = active.filter(assigned_to__isnull=True).count()
+        urgent_count = active.filter(priority=Conversation.Priority.URGENT).count()
+        approaching_sla_count = active.filter(
+            models.Q(sla__first_response_approaching_notified_at__isnull=False, sla__first_response_breached_at__isnull=True)
+            | models.Q(sla__next_response_approaching_notified_at__isnull=False, sla__next_response_breached_at__isnull=True)
+            | models.Q(sla__resolution_approaching_notified_at__isnull=False, sla__resolution_breached_at__isnull=True)
+        ).distinct().count()
+        breached_sla_count = active.filter(
+            models.Q(sla__first_response_breached_at__isnull=False)
+            | models.Q(sla__next_response_breached_at__isnull=False)
+            | models.Q(sla__resolution_breached_at__isnull=False)
+        ).distinct().count()
+
+        by_queue = [
+            {'queue_id': str(q.id), 'name': q.name, 'active_count': active.filter(queue=q).count()}
+            for q in Queue.objects.filter(workspace=workspace, is_active=True)
+        ]
+        by_team = [
+            {'team_id': str(t.id), 'name': t.name, 'active_count': active.filter(team=t).count()}
+            for t in Team.objects.filter(workspace=workspace, is_active=True)
+        ]
+
+        agents = []
+        for membership in workspace.memberships.select_related('user').all():
+            user = membership.user
+            presence, _ = OperatorPresence.objects.get_or_create(user=user, defaults={'status': OperatorPresence.Status.OFFLINE})
+            active_count = presence.active_conversation_count()
+            agents.append({
+                'user_id': str(user.id),
+                'display_name': user.display_name or user.email.split('@')[0],
+                'status': presence.effective_status(),
+                'active_conversation_count': active_count,
+                'max_capacity': presence.max_capacity,
+                'at_capacity': active_count >= presence.max_capacity,
+            })
+
+        responded = base.filter(sla__first_responded_at__gte=since, sla__isnull=False)
+        response_minutes = [
+            (c.sla.first_responded_at - c.created_at).total_seconds() / 60
+            for c in responded.select_related('sla') if c.sla.first_responded_at
+        ]
+        avg_first_response_minutes = round(sum(response_minutes) / len(response_minutes), 1) if response_minutes else None
+
+        return Response({
+            'workspace_id': str(workspace.id),
+            'unassigned_count': unassigned_count,
+            'waiting_count': unassigned_count,
+            'urgent_count': urgent_count,
+            'approaching_sla_count': approaching_sla_count,
+            'breached_sla_count': breached_sla_count,
+            'by_queue': by_queue,
+            'by_team': by_team,
+            'by_agent': agents,
+            'agents_at_capacity': sum(1 for a in agents if a['at_capacity']),
+            'avg_first_response_minutes': avg_first_response_minutes,
+            'period_hours': hours,
+        })

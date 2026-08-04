@@ -46,8 +46,20 @@ class PresenceView(APIView):
         serializer = PresenceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         presence = touch_presence(request.user, explicit_status=serializer.validated_data['status'])
-        return Response({'status': presence.effective_status()})
+        if 'max_capacity' in serializer.validated_data:
+            presence.max_capacity = serializer.validated_data['max_capacity']
+            presence.save(update_fields=['max_capacity'])
+        from notifications.services import broadcast_presence_updated
+        workspace_ids = list(request.user.workspace_memberships.values_list('workspace_id', flat=True))
+        broadcast_presence_updated(request.user, workspace_ids, presence.effective_status())
+        return Response({
+            'status': presence.effective_status(), 'max_capacity': presence.max_capacity,
+            'active_conversation_count': presence.active_conversation_count(),
+        })
 
     def get(self, request):
         presence = touch_presence(request.user)
-        return Response({'status': presence.effective_status()})
+        return Response({
+            'status': presence.effective_status(), 'max_capacity': presence.max_capacity,
+            'active_conversation_count': presence.active_conversation_count(),
+        })
