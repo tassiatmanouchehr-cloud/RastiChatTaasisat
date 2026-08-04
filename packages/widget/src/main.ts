@@ -40,6 +40,22 @@ interface WireMessage {
     created_at?: string;
     seen?: boolean;
     reader?: string;
+    branding?: Branding;
+}
+
+interface ConsultantBranding {
+    display_name: string;
+    avatar_url: string;
+    title: string;
+    status: 'ONLINE' | 'AWAY' | 'OFFLINE';
+    response_time_label: string | null;
+    rating: number | null;
+}
+
+interface Branding {
+    store: { name: string; logo_url: string; subtitle: string };
+    consultant: ConsultantBranding | null;
+    workspace_online: boolean;
 }
 
 const EMOJIS = '😀 😊 😉 😍 🤩 😎 🤔 😴 😢 😅 😇 😂 😘 😋 🤗 🤝 🙏 💪 👌 ✨ 🔥 ❤️ 💯 🎉 🎁 🛒 ⭐ 🌹 🌿 ☕'.split(' ');
@@ -72,7 +88,17 @@ class RastiChatWidget {
     private emojiPop!: HTMLElement;
     private fileInput!: HTMLInputElement;
     private micBtn!: HTMLElement;
+    private micCancelBtn!: HTMLElement;
     private badge!: HTMLElement;
+    private avatarEl!: HTMLElement;
+    private statusDotEl!: HTMLElement;
+    private titleEl!: HTMLElement;
+    private subtitleEl!: HTMLElement;
+    private offlineBanner!: HTMLElement;
+    private uploadStatus!: HTMLElement;
+    private uploadLabel!: HTMLElement;
+    private noticeEl!: HTMLElement;
+    private noticeHideTimer: number | undefined;
 
     private ws: WebSocket | null = null;
     private sessionToken: string | null = null;
@@ -90,6 +116,8 @@ class RastiChatWidget {
     private recordedChunks: BlobPart[] = [];
     private recordStartedAt = 0;
     private recordTimer: number | undefined;
+    private recordCancelled = false;
+    private branding: Branding | null = null;
 
     constructor(config: RastiChatConfig) {
         this.config = { position: 'right', primaryColor: '#BC5A38', ...config };
@@ -216,22 +244,55 @@ class RastiChatWidget {
                 .rasti-emo-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 2px; max-height: 160px; overflow: auto; }
                 .rasti-emo-grid button { font-size: 17px; border: none; background: none; cursor: pointer; padding: 4px; border-radius: 8px; }
                 .rasti-emo-grid button:hover { background: #FBF4EB; }
+                #rasti-offline-banner {
+                    display: none; background: #F3DCC9; color: #8a4a24; font-size: 11.5px; text-align: center;
+                    padding: 6px 10px; flex: none;
+                }
+                #rasti-offline-banner.show { display: block; }
+                #rasti-notice {
+                    display: none; background: #F6D9D3; color: #8a2f22; font-size: 11.5px; text-align: center;
+                    padding: 6px 10px; flex: none;
+                }
+                #rasti-notice.show { display: block; }
+                #rasti-upload-status { display: none; align-items: center; gap: 6px; font-size: 11px; color: #A08C77; padding: 0 2px 6px; }
+                #rasti-upload-status.show { display: flex; }
+                .rasti-spinner { width: 11px; height: 11px; border-radius: 50%; border: 2px solid #ECDCC8; border-top-color: ${this.config.primaryColor}; animation: rasti-spin .7s linear infinite; flex: none; }
+                @keyframes rasti-spin { to { transform: rotate(360deg); } }
+                .rasti-act.rasti-cancel-rec { display: none; color: #C0504A; }
+                .rasti-act.rasti-cancel-rec.show { display: flex; }
+                @media (max-width: 480px) {
+                    #rasti-launcher { bottom: max(16px, env(safe-area-inset-bottom)); }
+                    #rasti-panel {
+                        width: 100vw; height: 100dvh; max-height: 100dvh; bottom: 0; ${pos}: 0;
+                        border-radius: 0; border: none;
+                    }
+                    #rasti-header { padding-top: max(14px, env(safe-area-inset-top)); }
+                    #rasti-input-area { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+                    .rasti-bubble.rasti-product { width: min(210px, 78vw); }
+                    .rasti-bubble.rasti-rating { width: min(220px, 78vw); }
+                    .rasti-bubble.rasti-voice { min-width: min(170px, 60vw); }
+                }
+                .rasti-pop { width: min(240px, calc(100vw - 20px)); }
             </style>
             <div id="rasti-launcher">💬<span class="rasti-badge" id="rasti-badge"></span></div>
             <div id="rasti-panel">
                 <div id="rasti-header">
-                    <div class="rasti-avatar">آ<span class="dot"></span></div>
-                    <div class="rasti-htext"><b>پشتیبانی آنلاین</b><span>معمولاً در چند دقیقه پاسخ می‌دهیم</span></div>
+                    <div class="rasti-avatar" id="rasti-avatar">🙂<span class="dot" id="rasti-status-dot"></span></div>
+                    <div class="rasti-htext"><b id="rasti-title">پشتیبانی آنلاین</b><span id="rasti-subtitle">معمولاً در چند دقیقه پاسخ می‌دهیم</span></div>
                     <div id="rasti-close">✕</div>
                 </div>
+                <div id="rasti-offline-banner">در حال اتصال مجدد…</div>
+                <div id="rasti-notice"></div>
                 <div id="rasti-messages"></div>
                 <div id="rasti-quick"></div>
                 <div id="rasti-input-area">
                     <div class="rasti-pop" id="rasti-emoji-pop"></div>
+                    <div id="rasti-upload-status"><span class="rasti-spinner"></span><span id="rasti-upload-label">در حال ارسال…</span></div>
                     <div id="rasti-bar">
                         <button class="rasti-act" id="rasti-emoji-btn" type="button" title="ایموجی">🙂</button>
                         <button class="rasti-act" id="rasti-attach-btn" type="button" title="ارسال عکس">📎</button>
                         <input id="rasti-input" type="text" placeholder="پیام خود را بنویسید..." autocomplete="off" />
+                        <button class="rasti-act rasti-cancel-rec" id="rasti-mic-cancel" type="button" title="لغو ضبط">✕</button>
                         <button class="rasti-act" id="rasti-mic-btn" type="button" title="ارسال پیام صوتی">🎤</button>
                         <button id="rasti-send" type="button" title="ارسال">➤</button>
                     </div>
@@ -247,7 +308,16 @@ class RastiChatWidget {
         this.emojiPop = document.getElementById('rasti-emoji-pop')!;
         this.fileInput = document.getElementById('rasti-file') as HTMLInputElement;
         this.micBtn = document.getElementById('rasti-mic-btn')!;
+        this.micCancelBtn = document.getElementById('rasti-mic-cancel')!;
         this.badge = document.getElementById('rasti-badge')!;
+        this.avatarEl = document.getElementById('rasti-avatar')!;
+        this.statusDotEl = document.getElementById('rasti-status-dot')!;
+        this.titleEl = document.getElementById('rasti-title')!;
+        this.subtitleEl = document.getElementById('rasti-subtitle')!;
+        this.offlineBanner = document.getElementById('rasti-offline-banner')!;
+        this.uploadStatus = document.getElementById('rasti-upload-status')!;
+        this.uploadLabel = document.getElementById('rasti-upload-label')!;
+        this.noticeEl = document.getElementById('rasti-notice')!;
 
         this.emojiPop.innerHTML = `<div class="rasti-emo-grid">${EMOJIS.map(e => `<button type="button">${e}</button>`).join('')}</div>`;
 
@@ -299,11 +369,15 @@ class RastiChatWidget {
         });
 
         this.micBtn.addEventListener('click', () => this.toggleRecording());
+        this.micCancelBtn.addEventListener('click', () => this.cancelRecording());
     }
 
     private togglePanel(force?: boolean) {
         this.isOpen = force ?? !this.isOpen;
         this.panel.classList.toggle('open', this.isOpen);
+        if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 480px)').matches) {
+            document.body.style.overflow = this.isOpen ? 'hidden' : '';
+        }
         if (this.isOpen) {
             this.unreadCount = 0;
             this.updateBadge();
@@ -318,6 +392,39 @@ class RastiChatWidget {
             this.badge.textContent = String(this.unreadCount);
         } else {
             this.badge.style.display = 'none';
+        }
+    }
+
+    private showNotice(text: string) {
+        window.clearTimeout(this.noticeHideTimer);
+        this.noticeEl.textContent = text;
+        this.noticeEl.classList.add('show');
+        this.noticeHideTimer = window.setTimeout(() => this.noticeEl.classList.remove('show'), 4000);
+    }
+
+    private applyBranding(branding?: Branding | null) {
+        if (!branding) return;
+        this.branding = branding;
+        const store = branding.store;
+        const consultant = branding.consultant;
+
+        if (consultant) {
+            this.titleEl.textContent = consultant.display_name;
+            this.subtitleEl.textContent = consultant.title || store.subtitle || 'پشتیبانی آنلاین';
+            this.avatarEl.style.backgroundImage = consultant.avatar_url ? `url('${consultant.avatar_url}')` : '';
+            this.avatarEl.style.backgroundSize = 'cover';
+            this.avatarEl.style.backgroundPosition = 'center';
+            this.avatarEl.firstChild!.textContent = consultant.avatar_url ? '' : (consultant.display_name.trim().charAt(0) || '؟');
+            const dotColor = consultant.status === 'ONLINE' ? '#5E8A56' : consultant.status === 'AWAY' ? '#C2954A' : '#A08C77';
+            this.statusDotEl.style.background = dotColor;
+        } else {
+            this.titleEl.textContent = store.name || 'پشتیبانی آنلاین';
+            this.subtitleEl.textContent = store.subtitle || 'معمولاً در چند دقیقه پاسخ می‌دهیم';
+            this.avatarEl.style.backgroundImage = store.logo_url ? `url('${store.logo_url}')` : '';
+            this.avatarEl.style.backgroundSize = 'cover';
+            this.avatarEl.style.backgroundPosition = 'center';
+            this.avatarEl.firstChild!.textContent = store.logo_url ? '' : (store.name || '؟').trim().charAt(0);
+            this.statusDotEl.style.background = branding.workspace_online ? '#5E8A56' : '#A08C77';
         }
     }
 
@@ -351,6 +458,7 @@ class RastiChatWidget {
             });
             const data = await res.json();
             this.convId = data.id;
+            this.applyBranding(data.branding);
             this.connectWebSocket();
             await this.loadHistory();
         } catch (error) {
@@ -376,6 +484,10 @@ class RastiChatWidget {
 
         this.ws = new WebSocket(`${this.wsBase}/widget/${this.sessionToken}/${this.convId}/`);
 
+        this.ws.onopen = () => {
+            this.offlineBanner.classList.remove('show');
+        };
+
         this.ws.onmessage = (event) => {
             const data: WireMessage = JSON.parse(event.data);
             if (data.type === 'typing') {
@@ -384,6 +496,10 @@ class RastiChatWidget {
             }
             if (data.type === 'message.seen') {
                 if (data.reader === 'USER') this.markAllOutgoingSeen();
+                return;
+            }
+            if (data.type === 'branding.updated') {
+                this.applyBranding(data.branding);
                 return;
             }
             this.hideTyping();
@@ -400,6 +516,7 @@ class RastiChatWidget {
         };
 
         this.ws.onclose = () => {
+            this.offlineBanner.classList.add('show');
             setTimeout(() => this.connectWebSocket(), 2000);
         };
     }
@@ -462,6 +579,8 @@ class RastiChatWidget {
         form.append('message_type', messageType);
         form.append('client_message_id', clientId);
         if (extra) Object.entries(extra).forEach(([k, v]) => form.append(k, v));
+        this.uploadLabel.textContent = messageType === 'VOICE' ? 'در حال ارسال پیام صوتی…' : 'در حال ارسال تصویر…';
+        this.uploadStatus.classList.add('show');
         try {
             const res = await fetch(`${this.apiBase}/widget/conversations/${this.convId}/upload/`, { method: 'POST', body: form });
             if (!res.ok) return;
@@ -470,6 +589,8 @@ class RastiChatWidget {
             this.scrollToBottom();
         } catch (error) {
             console.error('RastiChat upload failed', error);
+        } finally {
+            this.uploadStatus.classList.remove('show');
         }
     }
 
@@ -481,14 +602,17 @@ class RastiChatWidget {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             this.recordedChunks = [];
+            this.recordCancelled = false;
             this.mediaRecorder = new MediaRecorder(stream);
             this.recordStartedAt = Date.now();
             this.mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) this.recordedChunks.push(e.data); };
             this.mediaRecorder.onstop = () => {
                 stream.getTracks().forEach(t => t.stop());
                 this.micBtn.classList.remove('recording');
+                this.micCancelBtn.classList.remove('show');
                 window.clearInterval(this.recordTimer);
                 this.micBtn.textContent = '🎤';
+                if (this.recordCancelled) return;
                 const duration = (Date.now() - this.recordStartedAt) / 1000;
                 if (duration < 0.6) return; // ignore accidental taps
                 const blob = new Blob(this.recordedChunks, { type: 'audio/webm' });
@@ -497,13 +621,21 @@ class RastiChatWidget {
             };
             this.mediaRecorder.start();
             this.micBtn.classList.add('recording');
+            this.micCancelBtn.classList.add('show');
             this.recordTimer = window.setInterval(() => {
                 const sec = Math.round((Date.now() - this.recordStartedAt) / 1000);
                 this.micBtn.textContent = fmtDuration(sec);
             }, 500);
         } catch (error) {
             console.error('RastiChat microphone access denied', error);
-            alert('برای ارسال پیام صوتی، دسترسی به میکروفون لازم است.');
+            this.showNotice('برای ارسال پیام صوتی، دسترسی به میکروفون لازم است.');
+        }
+    }
+
+    private cancelRecording() {
+        if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+            this.recordCancelled = true;
+            this.mediaRecorder.stop();
         }
     }
 

@@ -12,6 +12,7 @@ class FakeWebSocket {
   url: string;
   onmessage: ((event: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
+  onopen: (() => void) | null = null;
   sent: string[] = [];
 
   constructor(url: string) {
@@ -27,6 +28,27 @@ class FakeWebSocket {
   }
   emitMessage(payload: unknown) {
     this.onmessage?.({ data: JSON.stringify(payload) });
+  }
+}
+
+class FakeMediaRecorder {
+  static instances: FakeMediaRecorder[] = [];
+  state: 'inactive' | 'recording' = 'inactive';
+  ondataavailable: ((e: { data: Blob }) => void) | null = null;
+  onstop: (() => void) | null = null;
+  stream: unknown;
+
+  constructor(stream: unknown) {
+    this.stream = stream;
+    FakeMediaRecorder.instances.push(this);
+  }
+  start() {
+    this.state = 'recording';
+  }
+  stop() {
+    this.state = 'inactive';
+    this.ondataavailable?.({ data: new Blob(['x'], { type: 'audio/webm' }) });
+    this.onstop?.();
   }
 }
 
@@ -48,12 +70,29 @@ describe('RastiChatWidget', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let fetchMock: any;
 
+  let clock = 1_000_000;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let getUserMediaMock: any;
+
   beforeEach(() => {
     document.body.innerHTML = '';
     localStorage.clear();
     FakeWebSocket.instances = [];
+    FakeMediaRecorder.instances = [];
     // @ts-expect-error test double
     global.WebSocket = FakeWebSocket;
+    // @ts-expect-error test double
+    global.MediaRecorder = FakeMediaRecorder;
+
+    clock = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+
+    const fakeStream = { getTracks: () => [{ stop: vi.fn() }] };
+    getUserMediaMock = vi.fn(() => Promise.resolve(fakeStream));
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia: getUserMediaMock },
+      configurable: true,
+    });
 
     fetchMock = vi.fn((url: string) => {
       if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'sess-1' });
@@ -244,5 +283,168 @@ describe('RastiChatWidget', () => {
       expect.anything(),
     );
     expect(FakeWebSocket.instances[0].url.startsWith('wss://chat.example.com/ws/widget/')).toBe(true);
+  });
+
+  it('applies real store/consultant branding from the start response and never renders a hardcoded sample name', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'sess-1' });
+      if (url.includes('/widget/start/')) {
+        return jsonResponse({
+          id: 'conv-1',
+          branding: {
+            store: { name: 'Real Store', logo_url: '', subtitle: 'خانه و سبک زندگی' },
+            consultant: {
+              display_name: 'Ali Operator', avatar_url: '', title: 'مشاور ارشد', status: 'ONLINE',
+              response_time_label: null, rating: null,
+            },
+            workspace_online: true,
+          },
+        });
+      }
+      if (url.includes('/messages/')) return jsonResponse([]);
+      return jsonResponse({});
+    });
+    await initWidget();
+    expect(document.getElementById('rasti-title')!.textContent).toBe('Ali Operator');
+    expect(document.getElementById('rasti-subtitle')!.textContent).toBe('مشاور ارشد');
+    expect(document.body.innerHTML).not.toContain('آرُم');
+    expect(document.body.innerHTML).not.toContain('مریم رضایی');
+  });
+
+  it('falls back to store identity when no consultant is assigned yet', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'sess-1' });
+      if (url.includes('/widget/start/')) {
+        return jsonResponse({
+          id: 'conv-1',
+          branding: { store: { name: 'Store X', logo_url: '', subtitle: '' }, consultant: null, workspace_online: false },
+        });
+      }
+      if (url.includes('/messages/')) return jsonResponse([]);
+      return jsonResponse({});
+    });
+    await initWidget();
+    expect(document.getElementById('rasti-title')!.textContent).toBe('Store X');
+  });
+
+  it('updates branding live when a branding.updated event arrives over the websocket', async () => {
+    const ws = await initWidget();
+    ws.emitMessage({
+      type: 'branding.updated',
+      branding: {
+        store: { name: 'Store', logo_url: '', subtitle: '' },
+        consultant: {
+          display_name: 'New Op', avatar_url: '', title: '', status: 'AWAY', response_time_label: null, rating: null,
+        },
+        workspace_online: true,
+      },
+    });
+    expect(document.getElementById('rasti-title')!.textContent).toBe('New Op');
+  });
+
+  it('shows the offline banner when the websocket closes and hides it once reconnected', async () => {
+    const ws = await initWidget();
+    const banner = document.getElementById('rasti-offline-banner')!;
+    expect(banner.classList.contains('show')).toBe(false);
+    ws.close();
+    expect(banner.classList.contains('show')).toBe(true);
+    await new Promise((r) => setTimeout(r, 2200));
+    const ws2 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    ws2.onopen?.();
+    expect(banner.classList.contains('show')).toBe(false);
+  }, 10000);
+
+  it('shows an upload-status spinner while a file is uploading and hides it once done', async () => {
+    let resolveUpload!: (v: unknown) => void;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/widget/init/')) return jsonResponse({ session_token: 'sess-1' });
+      if (url.includes('/widget/start/')) return jsonResponse({ id: 'conv-1' });
+      if (url.includes('/messages/')) return jsonResponse([]);
+      if (url.includes('/upload/')) return new Promise((resolve) => { resolveUpload = resolve; });
+      return jsonResponse({});
+    });
+    await initWidget();
+    const file = new File(['abc'], 'pic.png', { type: 'image/png' });
+    const fileInput = document.getElementById('rasti-file') as HTMLInputElement;
+    Object.defineProperty(fileInput, 'files', { value: [file] });
+    fileInput.dispatchEvent(new Event('change'));
+    await flushMicrotasks();
+
+    const status = document.getElementById('rasti-upload-status')!;
+    expect(status.classList.contains('show')).toBe(true);
+
+    resolveUpload({
+      ok: true,
+      json: () => Promise.resolve({
+        sender_type: 'VISITOR', message_type: 'IMAGE', client_message_id: 'img1',
+        created_at: new Date().toISOString(), attachment_url: 'https://example.com/pic.png',
+      }),
+    });
+    await flushMicrotasks();
+    expect(status.classList.contains('show')).toBe(false);
+  });
+
+  it('records and uploads a voice message on mic start/stop', async () => {
+    await initWidget();
+    const micBtn = document.getElementById('rasti-mic-btn')!;
+    const cancelBtn = document.getElementById('rasti-mic-cancel')!;
+
+    (micBtn as HTMLElement).click();
+    await flushMicrotasks();
+
+    expect(FakeMediaRecorder.instances.length).toBe(1);
+    expect(micBtn.classList.contains('recording')).toBe(true);
+    expect(cancelBtn.classList.contains('show')).toBe(true);
+
+    clock += 1500; // simulate 1.5s of recording so it clears the accidental-tap threshold
+    (micBtn as HTMLElement).click(); // stop
+    await flushMicrotasks();
+
+    expect(micBtn.classList.contains('recording')).toBe(false);
+    expect(cancelBtn.classList.contains('show')).toBe(false);
+    const uploadCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('/upload/'));
+    expect(uploadCall).toBeTruthy();
+  });
+
+  it('cancels a recording without uploading anything', async () => {
+    await initWidget();
+    const micBtn = document.getElementById('rasti-mic-btn')!;
+    const cancelBtn = document.getElementById('rasti-mic-cancel')!;
+
+    (micBtn as HTMLElement).click();
+    await flushMicrotasks();
+    clock += 1500;
+    (cancelBtn as HTMLElement).click();
+    await flushMicrotasks();
+
+    expect(micBtn.classList.contains('recording')).toBe(false);
+    const uploadCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('/upload/'));
+    expect(uploadCall).toBeFalsy();
+  });
+
+  it('shows an inline notice instead of alert() when microphone access is denied', async () => {
+    getUserMediaMock.mockImplementation(() => Promise.reject(new Error('denied')));
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await initWidget();
+
+    (document.getElementById('rasti-mic-btn') as HTMLElement).click();
+    await flushMicrotasks();
+
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    const notice = document.getElementById('rasti-notice')!;
+    expect(notice.classList.contains('show')).toBe(true);
+    expect(notice.textContent).toContain('میکروفون');
+  });
+
+  it('locks and restores body scroll when opening/closing the panel on a mobile viewport', async () => {
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true }) as unknown as typeof window.matchMedia;
+    await initWidget();
+    const launcher = document.getElementById('rasti-launcher')!;
+    (launcher as HTMLElement).click();
+    expect(document.body.style.overflow).toBe('hidden');
+    (launcher as HTMLElement).click();
+    expect(document.body.style.overflow).toBe('');
   });
 });
