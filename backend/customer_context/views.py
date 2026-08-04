@@ -1,6 +1,6 @@
 from decimal import Decimal
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Sum
+from django.db.models import Avg, Sum
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -131,6 +131,17 @@ class CustomerContextView(APIView):
         total_spent = orders.aggregate(total=Sum('price'))['total'] or Decimal('0')
         tags = Tag.objects.filter(conversation_tags__conversation=conv)
 
+        # A manually-set profile score always wins (an operator's deliberate
+        # override); otherwise fall back to a live average of this visitor's
+        # own conversation ratings in this workspace — real data, never a
+        # fabricated default, and never stored/denormalized.
+        score = profile.score if profile and profile.score is not None else None
+        if score is None:
+            avg = Conversation.objects.filter(
+                visitor=visitor, workspace=conv.workspace, rating__isnull=False,
+            ).aggregate(avg=Avg('rating'))['avg']
+            score = round(avg, 1) if avg is not None else None
+
         return Response({
             'visitor_id': str(visitor.id),
             'name': visitor.name,
@@ -140,7 +151,7 @@ class CustomerContextView(APIView):
             'customer_since': visitor.created_at,
             'order_count': orders.count(),
             'total_spent': total_spent,
-            'score': profile.score if profile else None,
+            'score': score,
             'tags': TagSerializer(tags, many=True).data,
             'recent_orders': CustomerOrderSerializer(orders[:10], many=True).data,
         })

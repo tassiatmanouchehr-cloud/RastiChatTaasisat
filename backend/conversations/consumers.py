@@ -4,9 +4,11 @@ from channels.db import database_sync_to_async
 from rest_framework_simplejwt.tokens import AccessToken
 from django.contrib.auth import get_user_model
 from .models import Conversation, Message, MessageReceipt
+from .branding import build_widget_branding
 from visitors.models import VisitorSession
 from workspaces.models import WorkspaceMembership
 from platforms.models import PlatformMembership
+from accounts.presence import touch_presence
 
 User = get_user_model()
 
@@ -28,6 +30,12 @@ class BaseChatConsumer(AsyncJsonWebsocketConsumer):
 
     async def message_seen(self, event):
         await self.send_json({'type': 'message.seen', 'reader': event['reader']})
+
+    async def branding_updated(self, event):
+        # Delivered to both widget and dashboard sockets in the group; only the
+        # widget acts on it (a live consultant-identity/presence refresh), but
+        # both consumer types need a handler or Channels errors on dispatch.
+        await self.send_json({'type': 'branding.updated', 'branding': event['branding']})
 
 class WidgetChatConsumer(BaseChatConsumer):
     async def connect(self):
@@ -87,6 +95,10 @@ class DashboardChatConsumer(BaseChatConsumer):
         self.group_name = f"chat_{self.conv_id}"
         await self.accept()
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        is_assigned_operator = await self._touch_presence_and_check_assigned()
+        if is_assigned_operator:
+            branding = await self._build_branding()
+            await self.channel_layer.group_send(self.group_name, {'type': 'branding.updated', 'branding': branding})
 
     @database_sync_to_async
     def _get_user_conversation(self):
@@ -96,6 +108,15 @@ class DashboardChatConsumer(BaseChatConsumer):
             self.user = user  # FIX: Store user for later use
             return Conversation.objects.get(id=self.conv_id, workspace__memberships__user=user, type=Conversation.Type.CUSTOMER)
         except Exception: return None
+
+    @database_sync_to_async
+    def _touch_presence_and_check_assigned(self):
+        touch_presence(self.user)
+        return self.conversation.assigned_to_id == self.user.id
+
+    @database_sync_to_async
+    def _build_branding(self):
+        return build_widget_branding(self.conversation)
 
     async def disconnect(self, close_code):
         if hasattr(self, 'group_name'): await self.channel_layer.group_discard(self.group_name, self.channel_name)
@@ -122,10 +143,12 @@ class DashboardChatConsumer(BaseChatConsumer):
     @database_sync_to_async
     def _save_user_message(self, client_msg_id, msg_text):
         if Message.objects.filter(conversation=self.conversation, client_message_id=client_msg_id).exists(): return None
+        touch_presence(self.user)
         return Message.objects.create(conversation=self.conversation, sender_type=Message.SenderType.USER, sender=self.user, content=msg_text, client_message_id=client_msg_id)
 
     @database_sync_to_async
     def _mark_read(self):
+        touch_presence(self.user)
         for msg in self.conversation.messages.exclude(receipts__user=self.user).exclude(sender_type=Message.SenderType.USER):
             MessageReceipt.objects.create(message=msg, user=self.user)
 

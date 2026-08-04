@@ -11,11 +11,15 @@ from .media_validation import validate_and_normalize_upload, UploadValidationErr
 from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent
 from visitors.models import Visitor, VisitorSession
 from catalog.models import Product
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from audit.models import AuditEvent
+from .branding import build_widget_branding
+
+User = get_user_model()
 
 
 def _broadcast(conv_id, message_data, group_prefix='chat'):
@@ -31,6 +35,12 @@ def _broadcast(conv_id, message_data, group_prefix='chat'):
 def _broadcast_seen(conv_id, reader, group_prefix='chat'):
     async_to_sync(get_channel_layer().group_send)(
         f"{group_prefix}_{conv_id}", {'type': 'message.seen', 'reader': reader}
+    )
+
+
+def _broadcast_branding(conv):
+    async_to_sync(get_channel_layer().group_send)(
+        f"chat_{conv.id}", {'type': 'branding.updated', 'branding': build_widget_branding(conv)}
     )
 
 
@@ -56,12 +66,58 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def assign(self, request, pk=None):
-        conv = self.get_object(); conv.assigned_to = request.user; conv.status = Conversation.Status.OPEN; conv.save()
-        return Response(ConversationSerializer(conv).data)
+        """Assign (or reassign) the conversation to an operator.
+
+        With no `operator_id`, self-assigns the requesting operator (the
+        existing "واگذاری به من" behavior). With an `operator_id`, reassigns
+        to that operator instead — but only if they're a member of the same
+        workspace, so an operator can never assign a conversation to someone
+        outside their own tenant.
+        """
+        conv = self.get_object()
+        operator_id = request.data.get('operator_id')
+        if operator_id:
+            try:
+                target = User.objects.get(
+                    id=operator_id, workspace_memberships__workspace=conv.workspace,
+                )
+            except (User.DoesNotExist, DjangoValidationError, ValueError):
+                return Response({'error': 'Operator not found in this workspace'}, status=status.HTTP_404_NOT_FOUND)
+            conv.assigned_to = target
+        else:
+            conv.assigned_to = request.user
+        conv.status = Conversation.Status.OPEN
+        conv.save()
+        _broadcast_branding(conv)
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
     @action(detail=True, methods=['post'])
     def close(self, request, pk=None):
-        conv = self.get_object(); conv.status = Conversation.Status.CLOSED; conv.save()
-        return Response(ConversationSerializer(conv).data)
+        conv = self.get_object()
+        conv.status = Conversation.Status.CLOSED
+        conv.closed_at = timezone.now()
+        conv.save()
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def reopen(self, request, pk=None):
+        conv = self.get_object()
+        if conv.status != Conversation.Status.CLOSED:
+            return Response({'error': 'Conversation is not closed'}, status=status.HTTP_400_BAD_REQUEST)
+        conv.status = Conversation.Status.OPEN
+        conv.closed_at = None
+        conv.save()
+        return Response(ConversationSerializer(conv, context={'request': request}).data)
+
+    @action(detail=True, methods=['get'])
+    def teammates(self, request, pk=None):
+        """Workspace operators this conversation can be (re)assigned to."""
+        conv = self.get_object()
+        operators = User.objects.filter(workspace_memberships__workspace=conv.workspace).distinct()
+        return Response([
+            {'id': str(u.id), 'display_name': u.display_name or u.email.split('@')[0], 'email': u.email}
+            for u in operators
+        ])
 
     @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser],
             throttle_classes=[ScopedRateThrottle])
@@ -110,10 +166,15 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
             product = Product.objects.get(id=request.data.get('product_id'), workspace=conv.workspace)
         except (Product.DoesNotExist, ValueError, DjangoValidationError):
             return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+        discount_percent = 0
+        if product.old_price and product.old_price > product.price:
+            discount_percent = round((1 - (product.price / product.old_price)) * 100)
         metadata = {
             'product_id': str(product.id), 'brand': product.brand, 'name': product.name,
             'price': str(product.price), 'old_price': str(product.old_price) if product.old_price else None,
+            'currency': product.currency, 'discount_percent': discount_percent,
             'rating': float(product.rating), 'reviews_count': product.reviews_count, 'image': product.image,
+            'product_url': product.product_url, 'is_available': product.is_available,
         }
         msg = Message.objects.create(
             conversation=conv, sender=request.user, sender_type=Message.SenderType.USER,
@@ -148,7 +209,9 @@ class StartCustomerChatView(APIView):
             return Response({'error': 'Invalid session'}, status=status.HTTP_401_UNAUTHORIZED)
         conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
         if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
-        return Response(ConversationSerializer(conv).data, status=200)
+        data = ConversationSerializer(conv).data
+        data['branding'] = build_widget_branding(conv)
+        return Response(data, status=200)
 
 class MessageListView(APIView):
     permission_classes = [IsWorkspaceOperator]
@@ -196,6 +259,19 @@ class WidgetMessageListView(APIView):
             return Response(status=status.HTTP_404_NOT_FOUND)
         msgs = conv.messages.all().order_by('created_at')
         return Response(MessageSerializer(msgs, many=True, context={'request': request}).data)
+
+class WidgetBrandingView(APIView):
+    """Lets the widget re-fetch store/consultant branding on demand (e.g.
+    after a reconnect where a live `branding.updated` WS event may have been
+    missed while disconnected).
+    """
+    permission_classes = []
+    def get(self, request, conv_id):
+        try:
+            conv = _get_visitor_conversation(request.query_params.get('session_token'), conv_id)
+        except (VisitorSession.DoesNotExist, Conversation.DoesNotExist, DjangoValidationError, ValueError):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(build_widget_branding(conv))
 
 class WidgetMarkReadView(APIView):
     permission_classes = []

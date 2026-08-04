@@ -33,17 +33,24 @@ class ConversationSerializer(serializers.ModelSerializer):
     unread_count = serializers.SerializerMethodField()
     visitor = serializers.SerializerMethodField()
     last_message = serializers.SerializerMethodField()
+    assigned_to = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
         fields = [
             'id', 'type', 'status', 'subject', 'category', 'notes', 'rating',
-            'created_at', 'updated_at', 'unread_count', 'visitor', 'last_message',
+            'created_at', 'updated_at', 'closed_at', 'unread_count', 'visitor', 'last_message', 'assigned_to',
         ]
         read_only_fields = [
-            'id', 'type', 'status', 'created_at', 'updated_at', 'unread_count',
-            'rating', 'visitor', 'last_message',
+            'id', 'type', 'status', 'created_at', 'updated_at', 'closed_at', 'unread_count',
+            'rating', 'visitor', 'last_message', 'assigned_to',
         ]
+
+    def get_assigned_to(self, obj):
+        if not obj.assigned_to:
+            return None
+        u = obj.assigned_to
+        return {'id': str(u.id), 'display_name': u.display_name or u.email.split('@')[0], 'email': u.email}
 
     def get_unread_count(self, obj):
         request = self.context.get('request')

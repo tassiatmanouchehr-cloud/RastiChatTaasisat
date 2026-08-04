@@ -8,6 +8,10 @@ class Project(models.Model):
     public_key = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     allowed_domains = models.TextField(blank=True, help_text="Comma-separated list of allowed domains")
     is_active = models.BooleanField(default=True)
+    # Real store identity shown in the widget header — optional, the widget
+    # must fall back gracefully (never invent a name/logo) when these are unset.
+    logo_url = models.URLField(blank=True)
+    subtitle = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
