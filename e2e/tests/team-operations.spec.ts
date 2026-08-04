@@ -402,6 +402,11 @@ Notification.objects.create(recipient=user_b, workspace=ws_b, event_type='MENTIO
 
     await loginPlatformSupport(support);
     await support.reload();
+    // The Next.js dev-mode tooling overlay is a fixed bottom-left badge; in
+    // this RTL layout the reply "ارسال" button also renders on the visual
+    // left, so the overlay sits on top of it and swallows real clicks. Hide
+    // it outright rather than forcing clicks through to whatever is on top.
+    await support.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
     const ticketRow = support.getByText(subject, { exact: true }).first();
     await ticketRow.waitFor({ timeout: 15000 });
     await ticketRow.click();
@@ -416,10 +421,7 @@ Notification.objects.create(recipient=user_b, workspace=ws_b, event_type='MENTIO
 
     const replyText = uniqueText('پاسخ پشتیبانی پلتفرم');
     await support.locator('input[placeholder="پاسخ..."]').fill(replyText);
-    // force: true — the Next.js dev-mode tooling overlay portal sits over
-    // this bottom-of-viewport button and intercepts pointer events even
-    // though the button itself is visible/enabled/stable.
-    await support.getByText('ارسال', { exact: true }).click({ force: true });
+    await support.getByText('ارسال', { exact: true }).click();
     await expect(support.getByText(replyText)).toBeVisible({ timeout: 10000 });
 
     await adminCtx.close();
