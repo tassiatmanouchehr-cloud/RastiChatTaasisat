@@ -121,6 +121,66 @@ export const fetchProducts = async () => {
     return res.json();
 };
 
+export const fetchTags = async () => {
+    const res = await fetch(`${API_BASE}/tags/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch tags');
+    return res.json();
+};
+
+export const createTag = async (name: string, color?: string) => {
+    const res = await fetch(`${API_BASE}/tags/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, color: color || '' }),
+    });
+    if (!res.ok) throw new Error('Failed to create tag');
+    return res.json();
+};
+
+export const fetchConversationTags = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/tags/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch conversation tags');
+    return res.json();
+};
+
+export const attachConversationTag = async (convId: string, tagId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/tags/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag_id: tagId }),
+    });
+    if (!res.ok) throw new Error('Failed to attach tag');
+    return res.json();
+};
+
+export const detachConversationTag = async (convId: string, tagId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/tags/`, {
+        method: 'DELETE', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag_id: tagId }),
+    });
+    if (!res.ok) throw new Error('Failed to detach tag');
+    return res.json();
+};
+
+export const fetchConversationNotes = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/notes/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch notes');
+    return res.json();
+};
+
+export const createConversationNote = async (convId: string, body: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/notes/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+    });
+    if (!res.ok) throw new Error('Failed to add note');
+    return res.json();
+};
+
+export const fetchCustomerContext = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/customer-context/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch customer context');
+    return res.json();
+};
+
 export const sendTypingEvent = (ws: WebSocket | null) => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'typing' }));
 };

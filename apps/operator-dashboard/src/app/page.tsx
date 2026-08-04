@@ -5,6 +5,8 @@ import {
     patchConversation, markConversationRead, assignConversation, closeConversation,
     uploadAttachment, shareProduct, requestRating, fetchProducts,
     sendTypingEvent, sendMarkReadEvent,
+    fetchTags, fetchConversationTags, attachConversationTag, detachConversationTag,
+    fetchConversationNotes, createConversationNote, fetchCustomerContext,
 } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
@@ -14,6 +16,16 @@ interface Conversation {
     id: string; status: string; subject: string; category: string; notes: string; rating: number | null;
     created_at: string; updated_at: string; unread_count: number; visitor: Visitor | null; last_message: LastMessage | null;
 }
+interface Tag { id: string; name: string; color: string; }
+interface Note { id: string; body: string; created_by_email: string | null; created_at: string; }
+interface CustomerOrderSummary { id: string; product_name: string; product_image: string; price: string; status: string; ordered_at: string; }
+interface CustomerContext {
+    name: string | null; phone: string | null; location: string; customer_since: string;
+    order_count: number; total_spent: string; score: string | null; recent_orders: CustomerOrderSummary[];
+}
+const ORDER_STATUS_LABEL: Record<string, string> = {
+    PROCESSING: 'در حال پردازش', SHIPPED: 'در حال ارسال', DELIVERED: 'تحویل شده', CANCELLED: 'لغو شده',
+};
 interface MessageMetadata {
     caption?: string; duration?: string | number; product_id?: string; brand?: string; name?: string;
     price?: string | number; old_price?: string | number | null; rating?: string | number;
@@ -82,10 +94,10 @@ function VoiceBubble({ url, duration, mine }: { url: string; duration: number; m
         if (a.paused) { a.play().catch(() => {}); setPlaying(true); } else { a.pause(); setPlaying(false); }
     };
     return (
-        <div className={`flex items-center gap-2 min-w-[170px] rounded-2xl px-3 py-2 ${mine ? 'bg-orange-600 text-white' : 'bg-white border border-gray-200'}`}>
+        <div className={`flex items-center gap-2 min-w-[170px] rounded-2xl px-3 py-2 ${mine ? 'bg-terracotta text-white' : 'bg-white border border-gray-200'}`}>
             <button onClick={toggle} className={`w-7 h-7 rounded-full flex-none flex items-center justify-center text-xs ${mine ? 'bg-white/25' : 'bg-gray-100'}`}>{playing ? '⏸' : '▶'}</button>
             <div className={`flex-1 h-1 rounded ${mine ? 'bg-white/30' : 'bg-gray-200'}`}>
-                <div className={`h-full rounded ${mine ? 'bg-white/80' : 'bg-orange-500'}`} style={{ width: `${progress}%` }} />
+                <div className={`h-full rounded ${mine ? 'bg-white/80' : 'bg-terracotta'}`} style={{ width: `${progress}%` }} />
             </div>
             <span className="text-[10.5px] whitespace-nowrap">{time}</span>
             <audio
@@ -106,9 +118,9 @@ function MessageBubble({ msg }: { msg: Message }) {
     let body: React.ReactNode = null;
     if (msg.message_type === 'IMAGE') {
         body = (
-            <div className={`rounded-2xl overflow-hidden border ${mine ? 'border-orange-700' : 'border-gray-200'} max-w-[220px]`}>
+            <div className={`rounded-2xl overflow-hidden border ${mine ? 'border-terracotta-2' : 'border-gray-200'} max-w-[220px]`}>
                 <img src={msg.attachment_url || ''} alt="" className="cursor-pointer" onClick={() => window.open(msg.attachment_url || '', '_blank')} />
-                {msg.metadata?.caption && <div className={`text-xs px-2 py-1.5 ${mine ? 'bg-orange-600 text-white' : 'bg-white'}`}>{msg.metadata.caption}</div>}
+                {msg.metadata?.caption && <div className={`text-xs px-2 py-1.5 ${mine ? 'bg-terracotta text-white' : 'bg-white'}`}>{msg.metadata.caption}</div>}
             </div>
         );
     } else if (msg.message_type === 'VOICE') {
@@ -117,13 +129,13 @@ function MessageBubble({ msg }: { msg: Message }) {
         const m = msg.metadata || {};
         body = (
             <div className="w-[210px] rounded-2xl overflow-hidden border border-gray-200 bg-white text-gray-800">
-                <div className="h-20 flex items-center justify-center text-white text-xl font-extrabold bg-gradient-to-br from-amber-500 to-orange-700 bg-cover bg-center" style={m.image ? { backgroundImage: `url(${m.image})` } : {}}>
+                <div className="h-20 flex items-center justify-center text-white text-xl font-extrabold bg-gradient-to-br from-gold to-terracotta-2 bg-cover bg-center" style={m.image ? { backgroundImage: `url(${m.image})` } : {}}>
                     {!m.image && initials(m.brand || m.name)}
                 </div>
                 <div className="p-2.5">
                     <div className="text-[10px] text-gray-500 font-semibold">{m.brand}</div>
                     <div className="text-[12.5px] font-bold leading-relaxed mt-0.5">{m.name}</div>
-                    <div className="text-[10.5px] text-amber-600 mt-1">⭐ {m.rating} ({m.reviews_count} نظر)</div>
+                    <div className="text-[10.5px] text-gold mt-1">⭐ {m.rating} ({m.reviews_count} نظر)</div>
                     <div className="flex items-baseline gap-1.5 mt-1.5">
                         <span className="font-extrabold text-sm">{Number(m.price || 0).toLocaleString('fa-IR')}</span>
                         {m.old_price && <span className="text-[10.5px] text-gray-400 line-through">{Number(m.old_price).toLocaleString('fa-IR')}</span>}
@@ -133,13 +145,13 @@ function MessageBubble({ msg }: { msg: Message }) {
             </div>
         );
     } else if (msg.message_type === 'RATING_REQUEST') {
-        body = <div className="rounded-2xl px-4 py-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs">⭐ از مشتری درخواست امتیاز شد</div>;
+        body = <div className="rounded-2xl px-4 py-3 bg-gold-soft border border-gold-soft text-terracotta-2 text-xs">⭐ از مشتری درخواست امتیاز شد</div>;
     } else if (msg.message_type === 'RATING') {
         const r = Number(msg.metadata?.rating) || 0;
-        body = <div className="rounded-2xl px-4 py-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs">مشتری امتیاز داد: {'★'.repeat(r)}{'☆'.repeat(5 - r)}</div>;
+        body = <div className="rounded-2xl px-4 py-3 bg-gold-soft border border-gold-soft text-terracotta-2 text-xs">مشتری امتیاز داد: {'★'.repeat(r)}{'☆'.repeat(5 - r)}</div>;
     } else {
         body = (
-            <div className={`rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words max-w-md ${mine ? 'bg-orange-600 text-white rounded-tl-md' : 'bg-white border border-gray-200 rounded-tr-md'}`}>
+            <div className={`rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words max-w-md ${mine ? 'bg-terracotta text-white rounded-tl-md' : 'bg-white border border-gray-200 rounded-tr-md'}`}>
                 {msg.content}
             </div>
         );
@@ -149,9 +161,121 @@ function MessageBubble({ msg }: { msg: Message }) {
         <div className={`flex flex-col ${align} max-w-[80%]`}>
             {body}
             <div className="text-[10px] text-gray-400 mt-1 mx-1 flex items-center gap-1">
-                {time}{tick && <span className={msg.seen ? 'text-green-600' : ''}>{tick}</span>}
+                {time}{tick && <span className={msg.seen ? 'text-success' : ''}>{tick}</span>}
             </div>
         </div>
+    );
+}
+
+interface CustomerInfoPanelProps {
+    selectedConv: Conversation;
+    messages: Message[];
+    categoryDraft: string;
+    setCategoryDraft: (v: string) => void;
+    handleCategoryBlur: () => void;
+    workspaceTags: Tag[];
+    conversationTags: Tag[];
+    onToggleTag: (tag: Tag) => void;
+    notes: Note[];
+    newNote: string;
+    setNewNote: (v: string) => void;
+    onAddNote: () => void;
+    customerContext: CustomerContext | null;
+}
+
+function CustomerInfoPanel({
+    selectedConv, messages, categoryDraft, setCategoryDraft, handleCategoryBlur,
+    workspaceTags, conversationTags, onToggleTag, notes, newNote, setNewNote, onAddNote, customerContext,
+}: CustomerInfoPanelProps) {
+    const attachedIds = new Set(conversationTags.map(t => t.id));
+    return (
+        <>
+            <div className="border border-gray-200 rounded-xl p-4 text-center">
+                <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-xl">{initials(selectedConv.visitor?.name)}</div>
+                <div className="font-bold mt-2">{selectedConv.visitor?.name || 'مهمان'}</div>
+                <div className="text-xs text-gray-400 mt-0.5">{customerContext?.phone || selectedConv.visitor?.mobile || selectedConv.visitor?.email || '—'}</div>
+                {customerContext?.location && <div className="text-[11px] text-gray-400 mt-0.5">📍 {customerContext.location}</div>}
+                {selectedConv.visitor?.created_at && <div className="text-[11px] text-gray-400 mt-2">عضویت از {new Date(selectedConv.visitor.created_at).toLocaleDateString('fa-IR')}</div>}
+            </div>
+
+            <div className="border border-gray-200 rounded-xl p-4">
+                <div className="text-xs font-bold text-gray-500 mb-2">خلاصه مشتری</div>
+                <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <div className="font-extrabold text-terracotta">{messages.length}</div>
+                        <div className="text-[10.5px] text-gray-400">پیام</div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <div className="font-extrabold text-terracotta">{selectedConv.rating ? `${selectedConv.rating}★` : '—'}</div>
+                        <div className="text-[10.5px] text-gray-400">امتیاز گفتگو</div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <div className="font-extrabold text-terracotta">{customerContext ? customerContext.order_count : '—'}</div>
+                        <div className="text-[10.5px] text-gray-400">سفارش</div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <div className="font-extrabold text-terracotta">{customerContext ? Number(customerContext.total_spent).toLocaleString('fa-IR') : '—'}</div>
+                        <div className="text-[10.5px] text-gray-400">مجموع خرید (تومان)</div>
+                    </div>
+                </div>
+            </div>
+
+            {customerContext && customerContext.recent_orders.length > 0 && (
+                <div className="border border-gray-200 rounded-xl p-4">
+                    <div className="text-xs font-bold text-gray-500 mb-2">سفارش‌های اخیر</div>
+                    <div className="flex flex-col gap-2">
+                        {customerContext.recent_orders.map(o => (
+                            <div key={o.id} className="flex items-center gap-2 text-xs">
+                                <div className="w-8 h-8 rounded-lg bg-gray-100 flex-none bg-cover bg-center" style={o.product_image ? { backgroundImage: `url(${o.product_image})` } : {}} />
+                                <div className="flex-1 min-w-0">
+                                    <div className="truncate font-medium">{o.product_name}</div>
+                                    <div className="text-[10.5px] text-gray-400">{Number(o.price).toLocaleString('fa-IR')} تومان</div>
+                                </div>
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 flex-none">{ORDER_STATUS_LABEL[o.status] || o.status}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            <div className="border border-gray-200 rounded-xl p-4">
+                <div className="text-xs font-bold text-gray-500 mb-2">دسته‌بندی</div>
+                <input value={categoryDraft} onChange={e => setCategoryDraft(e.target.value)} onBlur={handleCategoryBlur}
+                       placeholder="مثلاً: سوال قیمت" className="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-2 outline-none focus:border-terracotta" />
+            </div>
+
+            <div className="border border-gray-200 rounded-xl p-4">
+                <div className="text-xs font-bold text-gray-500 mb-2">برچسب‌ها</div>
+                <div className="flex flex-wrap gap-1.5">
+                    {workspaceTags.length === 0 && <span className="text-[11px] text-gray-400">برچسبی در این فضای کاری ثبت نشده</span>}
+                    {workspaceTags.map(tag => (
+                        <button key={tag.id} onClick={() => onToggleTag(tag)}
+                                className={`text-[10.5px] font-semibold px-2.5 py-1 rounded-full border ${attachedIds.has(tag.id) ? 'bg-terracotta-tint text-terracotta-2 border-terracotta-soft' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-terracotta'}`}>
+                            {tag.name}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="border border-gray-200 rounded-xl p-4 flex-1">
+                <div className="text-xs font-bold text-gray-500 mb-2">یادداشت‌های اپراتور</div>
+                <div className="flex flex-col gap-2 mb-2">
+                    <textarea value={newNote} onChange={e => setNewNote(e.target.value)}
+                              placeholder="یادداشت خصوصی درباره این مشتری…"
+                              className="w-full min-h-[60px] text-xs border border-gray-200 rounded-lg px-2.5 py-2 outline-none focus:border-terracotta resize-none" />
+                    <button onClick={onAddNote} disabled={!newNote.trim()} className="self-start text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-terracotta text-white disabled:opacity-40">افزودن یادداشت</button>
+                </div>
+                <div className="flex flex-col gap-2 max-h-52 overflow-y-auto">
+                    {notes.length === 0 && <div className="text-[11px] text-gray-400">یادداشتی ثبت نشده</div>}
+                    {notes.map(note => (
+                        <div key={note.id} className="text-xs bg-gray-50 rounded-lg p-2">
+                            <div className="whitespace-pre-wrap break-words">{note.body}</div>
+                            <div className="text-[10px] text-gray-400 mt-1">{note.created_by_email || 'اپراتور'} • {new Date(note.created_at).toLocaleString('fa-IR')}</div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </>
     );
 }
 
@@ -168,10 +292,15 @@ export default function DashboardPage() {
     const [showEmoji, setShowEmoji] = useState(false);
     const [showProducts, setShowProducts] = useState(false);
     const [products, setProducts] = useState<Product[]>([]);
-    const [notesDraft, setNotesDraft] = useState('');
     const [categoryDraft, setCategoryDraft] = useState('');
     const [recording, setRecording] = useState(false);
     const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
+    const [showMobileInfo, setShowMobileInfo] = useState(false);
+    const [workspaceTags, setWorkspaceTags] = useState<Tag[]>([]);
+    const [conversationTags, setConversationTags] = useState<Tag[]>([]);
+    const [notes, setNotes] = useState<Note[]>([]);
+    const [newNote, setNewNote] = useState('');
+    const [customerContext, setCustomerContext] = useState<CustomerContext | null>(null);
 
     const wsRef = useRef<WebSocket | null>(null);
     const renderedIds = useRef<Set<string>>(new Set());
@@ -188,6 +317,7 @@ export default function DashboardPage() {
         if (!localStorage.getItem('token')) { router.push('/login'); return; }
         fetchConversations().then(setConversations).catch(() => setError('Failed to load conversations'));
         fetchProducts().then(setProducts).catch(() => {});
+        fetchTags().then(setWorkspaceTags).catch(() => {});
     }, []);
 
     useEffect(() => { messagesEndRef.current?.scrollIntoView({ block: 'end' }); }, [messages, visitorTyping]);
@@ -233,9 +363,9 @@ export default function DashboardPage() {
     const handleSelectConv = async (conv: Conversation) => {
         selectedConvId.current = conv.id;
         setSelectedConv(conv);
-        setNotesDraft(conv.notes || '');
         setCategoryDraft(conv.category || '');
         setMobileView('chat');
+        setShowMobileInfo(false);
         setShowEmoji(false); setShowProducts(false); setVisitorTyping(false);
         renderedIds.current = new Set();
         try {
@@ -248,6 +378,9 @@ export default function DashboardPage() {
         wsRef.current = connectWebSocket(conv.id, onWsMessage);
 
         markConversationRead(conv.id).catch(() => {});
+        fetchConversationTags(conv.id).then(setConversationTags).catch(() => setConversationTags([]));
+        fetchConversationNotes(conv.id).then(setNotes).catch(() => setNotes([]));
+        fetchCustomerContext(conv.id).then(setCustomerContext).catch(() => setCustomerContext(null));
         setConversations(prev => prev.map(c => c.id === conv.id ? { ...c, unread_count: 0 } : c));
     };
 
@@ -353,14 +486,6 @@ export default function DashboardPage() {
             setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
         } catch { notifyActionError('پایان گفتگو ناموفق بود'); }
     };
-    const handleNotesBlur = async () => {
-        if (!selectedConv || notesDraft === selectedConv.notes) return;
-        try {
-            const updated = await patchConversation(selectedConv.id, { notes: notesDraft });
-            setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
-            setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
-        } catch { /* keep the local draft; user can retry by editing again */ }
-    };
     const handleCategoryBlur = async () => {
         if (!selectedConv || categoryDraft === selectedConv.category) return;
         try {
@@ -373,6 +498,26 @@ export default function DashboardPage() {
     const handleLogout = () => {
         localStorage.removeItem('token'); localStorage.removeItem('user');
         router.push('/login');
+    };
+
+    const handleToggleTag = async (tag: Tag) => {
+        if (!selectedConv) return;
+        const alreadyOn = conversationTags.some(t => t.id === tag.id);
+        try {
+            const updated = alreadyOn
+                ? await detachConversationTag(selectedConv.id, tag.id)
+                : await attachConversationTag(selectedConv.id, tag.id);
+            setConversationTags(updated);
+        } catch { notifyActionError('بروزرسانی برچسب ناموفق بود'); }
+    };
+
+    const handleAddNote = async () => {
+        if (!selectedConv || !newNote.trim()) return;
+        try {
+            const note = await createConversationNote(selectedConv.id, newNote.trim());
+            setNotes(prev => [note, ...prev]);
+            setNewNote('');
+        } catch { notifyActionError('ثبت یادداشت ناموفق بود'); }
     };
 
     if (error) return <div className="p-4 text-red-500" dir="rtl">{error}</div>;
@@ -393,18 +538,18 @@ export default function DashboardPage() {
                     <button onClick={handleLogout} className="text-xs text-gray-400 hover:text-red-500">خروج</button>
                 </div>
                 <div className="p-3 border-b border-gray-100">
-                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="جستجوی مشتری یا گفتگو…" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-orange-400" />
+                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="جستجوی مشتری یا گفتگو…" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-terracotta" />
                 </div>
                 <div className="flex gap-1 px-3 py-2 border-b border-gray-100 overflow-x-auto">
                     {TABS.map(t => (
-                        <button key={t.key} onClick={() => setTab(t.key)} className={`text-xs font-semibold px-2.5 py-1.5 rounded-lg whitespace-nowrap ${tab === t.key ? 'bg-orange-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>{t.label}</button>
+                        <button key={t.key} onClick={() => setTab(t.key)} className={`text-xs font-semibold px-2.5 py-1.5 rounded-lg whitespace-nowrap ${tab === t.key ? 'bg-terracotta text-white' : 'text-gray-500 hover:bg-gray-100'}`}>{t.label}</button>
                     ))}
                 </div>
                 <div className="flex-1 overflow-y-auto">
                     {filtered.map(conv => (
                         <div key={conv.id} onClick={() => handleSelectConv(conv)}
-                             className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 flex gap-2.5 ${selectedConv?.id === conv.id ? 'bg-orange-50' : ''}`}>
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-500 to-orange-700 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(conv.visitor?.name)}</div>
+                             className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 flex gap-2.5 ${selectedConv?.id === conv.id ? 'bg-terracotta-tint' : ''}`}>
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(conv.visitor?.name)}</div>
                             <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between gap-2">
                                     <span className="font-semibold text-sm truncate">{conv.visitor?.name || 'مهمان'}</span>
@@ -412,11 +557,11 @@ export default function DashboardPage() {
                                 </div>
                                 <div className="flex items-center justify-between gap-2 mt-0.5">
                                     <span className="text-xs text-gray-500 truncate">{previewFor(conv.last_message)}</span>
-                                    {conv.unread_count > 0 && <span className="bg-orange-600 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 flex-none">{conv.unread_count}</span>}
+                                    {conv.unread_count > 0 && <span className="bg-terracotta text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 flex-none">{conv.unread_count}</span>}
                                 </div>
                                 <div className="mt-1 flex gap-1">
                                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{STATUS_LABEL[conv.status] || conv.status}</span>
-                                    {conv.category && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 truncate">{conv.category}</span>}
+                                    {conv.category && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gold-soft text-terracotta-2 border border-gold-soft truncate">{conv.category}</span>}
                                 </div>
                             </div>
                         </div>
@@ -432,19 +577,20 @@ export default function DashboardPage() {
                         <div className="p-3 bg-white border-b border-gray-200 flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2.5 min-w-0">
                                 <button onClick={() => setMobileView('list')} className="md:hidden text-gray-500 px-1">›</button>
-                                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-500 to-orange-700 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(selectedConv.visitor?.name)}</div>
+                                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(selectedConv.visitor?.name)}</div>
                                 <div className="min-w-0">
                                     <div className="font-bold text-sm truncate">{selectedConv.visitor?.name || 'مهمان'}</div>
                                     <div className="text-[11px] text-gray-500">
                                         {STATUS_LABEL[selectedConv.status] || selectedConv.status}
-                                        {selectedConv.rating && <span className="text-amber-500"> • امتیاز {selectedConv.rating}★</span>}
+                                        {selectedConv.rating && <span className="text-gold"> • امتیاز {selectedConv.rating}★</span>}
                                     </div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 flex-none">
                                 <button onClick={handleAssign} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700">واگذاری به من</button>
-                                <button onClick={handleRequestRating} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200">⭐ درخواست امتیاز</button>
+                                <button onClick={handleRequestRating} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gold-soft hover:bg-gold-soft/70 text-terracotta-2 border border-gold-soft">⭐ درخواست امتیاز</button>
                                 <button onClick={handleClose} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600">پایان گفتگو</button>
+                                <button onClick={() => setShowMobileInfo(true)} className="lg:hidden w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center flex-none" title="اطلاعات مشتری">ⓘ</button>
                             </div>
                         </div>
 
@@ -470,7 +616,7 @@ export default function DashboardPage() {
                         <div className="bg-white border-t border-gray-200 p-3 relative">
                             <div className="flex gap-1.5 overflow-x-auto pb-2">
                                 {QUICK_REPLIES.map(q => (
-                                    <button key={q} onClick={() => handleSend(q)} className="text-xs whitespace-nowrap px-2.5 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-400 hover:text-orange-600">{q}</button>
+                                    <button key={q} onClick={() => handleSend(q)} className="text-xs whitespace-nowrap px-2.5 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-terracotta hover:text-terracotta">{q}</button>
                                 ))}
                             </div>
 
@@ -487,7 +633,7 @@ export default function DashboardPage() {
                                     {products.length === 0 && <div className="text-xs text-gray-400 px-1 py-2">محصولی ثبت نشده است</div>}
                                     {products.map(p => (
                                         <button key={p.id} onClick={() => handleShareProduct(p)} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-gray-50 text-right">
-                                            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500 to-orange-700 flex-none flex items-center justify-center text-white text-xs font-bold bg-cover bg-center" style={p.image ? { backgroundImage: `url(${p.image})` } : {}}>{!p.image && initials(p.brand || p.name)}</div>
+                                            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-gold to-terracotta-2 flex-none flex items-center justify-center text-white text-xs font-bold bg-cover bg-center" style={p.image ? { backgroundImage: `url(${p.image})` } : {}}>{!p.image && initials(p.brand || p.name)}</div>
                                             <div className="min-w-0 flex-1">
                                                 <div className="text-xs font-semibold truncate">{p.name}</div>
                                                 <div className="text-[11px] text-gray-400">{Number(p.price).toLocaleString('fa-IR')} تومان</div>
@@ -497,7 +643,7 @@ export default function DashboardPage() {
                                 </div>
                             )}
 
-                            <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-2 py-1.5 focus-within:border-orange-400">
+                            <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-2 py-1.5 focus-within:border-terracotta">
                                 <button onClick={() => { setShowProducts(v => !v); setShowEmoji(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="معرفی محصول">🛍️</button>
                                 <button onClick={() => { setShowEmoji(v => !v); setShowProducts(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="ایموجی">🙂</button>
                                 <button onClick={() => fileInputRef.current?.click()} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="پیوست عکس">📎</button>
@@ -506,7 +652,7 @@ export default function DashboardPage() {
                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
                                        className="flex-1 bg-transparent outline-none text-sm px-1 min-w-0" placeholder="پاسخ به مشتری…" />
                                 <button onClick={handleToggleRecording} className={`w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white ${recording ? 'text-red-500 animate-pulse' : ''}`} title="پیام صوتی">🎤</button>
-                                <button onClick={() => handleSend()} className="w-9 h-9 rounded-lg bg-orange-600 text-white flex items-center justify-center flex-none">➤</button>
+                                <button onClick={() => handleSend()} className="w-9 h-9 rounded-lg bg-terracotta text-white flex items-center justify-center flex-none">➤</button>
                             </div>
                         </div>
                     </>
@@ -515,42 +661,33 @@ export default function DashboardPage() {
                 )}
             </div>
 
-            {/* Customer info panel */}
+            {/* Customer info panel — desktop/tablet-large: always-visible side panel */}
             {selectedConv && (
                 <div className="hidden lg:flex w-[300px] border-r border-gray-200 bg-white flex-col overflow-y-auto p-4 gap-3">
-                    <div className="border border-gray-200 rounded-xl p-4 text-center">
-                        <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-amber-500 to-orange-700 text-white flex items-center justify-center font-bold text-xl">{initials(selectedConv.visitor?.name)}</div>
-                        <div className="font-bold mt-2">{selectedConv.visitor?.name || 'مهمان'}</div>
-                        <div className="text-xs text-gray-400 mt-0.5">{selectedConv.visitor?.mobile || selectedConv.visitor?.email || '—'}</div>
-                        {selectedConv.visitor?.created_at && <div className="text-[11px] text-gray-400 mt-2">عضویت از {new Date(selectedConv.visitor.created_at).toLocaleDateString('fa-IR')}</div>}
-                    </div>
+                    <CustomerInfoPanel
+                        selectedConv={selectedConv} messages={messages}
+                        categoryDraft={categoryDraft} setCategoryDraft={setCategoryDraft} handleCategoryBlur={handleCategoryBlur}
+                        workspaceTags={workspaceTags} conversationTags={conversationTags} onToggleTag={handleToggleTag}
+                        notes={notes} newNote={newNote} setNewNote={setNewNote} onAddNote={handleAddNote}
+                        customerContext={customerContext}
+                    />
+                </div>
+            )}
 
-                    <div className="border border-gray-200 rounded-xl p-4">
-                        <div className="text-xs font-bold text-gray-500 mb-2">آمار گفتگو</div>
-                        <div className="grid grid-cols-2 gap-2">
-                            <div className="bg-gray-50 rounded-lg p-2 text-center">
-                                <div className="font-extrabold text-orange-600">{messages.length}</div>
-                                <div className="text-[10.5px] text-gray-400">پیام</div>
-                            </div>
-                            <div className="bg-gray-50 rounded-lg p-2 text-center">
-                                <div className="font-extrabold text-orange-600">{selectedConv.rating ? `${selectedConv.rating}★` : '—'}</div>
-                                <div className="text-[10.5px] text-gray-400">امتیاز</div>
-                            </div>
-                        </div>
+            {/* Customer info panel — mobile/tablet-narrow: full-screen overlay with back control */}
+            {selectedConv && showMobileInfo && (
+                <div className="lg:hidden fixed inset-0 z-40 bg-white flex flex-col overflow-y-auto p-4 gap-3">
+                    <div className="flex items-center justify-between border-b border-gray-200 pb-3 mb-1">
+                        <span className="font-bold text-sm">پروفایل مشتری</span>
+                        <button onClick={() => setShowMobileInfo(false)} className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center" title="بازگشت">✕</button>
                     </div>
-
-                    <div className="border border-gray-200 rounded-xl p-4">
-                        <div className="text-xs font-bold text-gray-500 mb-2">دسته‌بندی</div>
-                        <input value={categoryDraft} onChange={e => setCategoryDraft(e.target.value)} onBlur={handleCategoryBlur}
-                               placeholder="مثلاً: سوال قیمت" className="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-2 outline-none focus:border-orange-400" />
-                    </div>
-
-                    <div className="border border-gray-200 rounded-xl p-4 flex-1">
-                        <div className="text-xs font-bold text-gray-500 mb-2">یادداشت اپراتور</div>
-                        <textarea value={notesDraft} onChange={e => setNotesDraft(e.target.value)} onBlur={handleNotesBlur}
-                                  placeholder="یادداشت خصوصی درباره این مشتری…"
-                                  className="w-full min-h-[90px] text-xs border border-gray-200 rounded-lg px-2.5 py-2 outline-none focus:border-orange-400 resize-none" />
-                    </div>
+                    <CustomerInfoPanel
+                        selectedConv={selectedConv} messages={messages}
+                        categoryDraft={categoryDraft} setCategoryDraft={setCategoryDraft} handleCategoryBlur={handleCategoryBlur}
+                        workspaceTags={workspaceTags} conversationTags={conversationTags} onToggleTag={handleToggleTag}
+                        notes={notes} newNote={newNote} setNewNote={setNewNote} onAddNote={handleAddNote}
+                        customerContext={customerContext}
+                    />
                 </div>
             )}
         </div>

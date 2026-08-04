@@ -2,6 +2,10 @@ interface RastiChatConfig {
     projectKey: string;
     position?: 'left' | 'right';
     primaryColor?: string;
+    /** Base REST URL, e.g. "https://chat.example.com/api/v1". Defaults to localhost for local development. */
+    apiBase?: string;
+    /** Base WebSocket URL, e.g. "wss://chat.example.com/ws". Defaults to localhost for local development. */
+    wsBase?: string;
 }
 
 interface WireMessage {
@@ -69,6 +73,8 @@ class RastiChatWidget {
 
     constructor(config: RastiChatConfig) {
         this.config = { position: 'right', primaryColor: '#BC5A38', ...config };
+        if (config.apiBase) this.apiBase = config.apiBase.replace(/\/$/, '');
+        if (config.wsBase) this.wsBase = config.wsBase.replace(/\/$/, '');
         this.container = document.createElement('div');
         this.container.id = 'rasti-container';
         document.body.appendChild(this.container);
@@ -78,11 +84,23 @@ class RastiChatWidget {
         this.initSession();
     }
 
+    private loadFont() {
+        // Best-effort: a slow/blocked font request must never break the widget.
+        if (document.getElementById('rasti-font-link')) return;
+        const link = document.createElement('link');
+        link.id = 'rasti-font-link';
+        link.rel = 'stylesheet';
+        link.href = 'https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&display=swap';
+        document.head.appendChild(link);
+    }
+
     private initUI() {
+        this.loadFont();
         const pos = this.config.position;
         this.container.innerHTML = `
             <style>
-                #rasti-container * { box-sizing: border-box; font-family: Tahoma, Arial, sans-serif; }
+                /* Design tokens mirrored from docs/product/DESIGN_TOKENS.md — keep in sync with apps/operator-dashboard/src/app/globals.css */
+                #rasti-container * { box-sizing: border-box; font-family: 'Vazirmatn', Tahoma, Arial, sans-serif; }
                 #rasti-container { direction: rtl; }
                 #rasti-launcher {
                     position: fixed; bottom: 20px; ${pos}: 20px;
