@@ -33,7 +33,7 @@ class RichMessageFlowTests(TransactionTestCase):
 
     def test_operator_can_upload_image(self):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
-        img = SimpleUploadedFile('pic.png', b'fake-image-bytes', content_type='image/png')
+        img = SimpleUploadedFile('pic.png', b'\x89PNG\r\n\x1a\n' + b'\x00' * 16, content_type='image/png')
         res = self.client.post(
             f'/api/v1/conversations/customer/{self.conv.id}/upload/',
             {'file': img, 'message_type': 'IMAGE', 'client_message_id': 'img1', 'caption': 'nice'},
@@ -45,7 +45,7 @@ class RichMessageFlowTests(TransactionTestCase):
         self.assertEqual(res.data['metadata']['caption'], 'nice')
 
     def test_visitor_can_upload_voice(self):
-        audio = SimpleUploadedFile('note.webm', b'fake-audio-bytes', content_type='audio/webm')
+        audio = SimpleUploadedFile('note.webm', b'\x1a\x45\xdf\xa3' + b'\x00' * 16, content_type='audio/webm')
         res = self.client.post(
             f'/api/v1/widget/conversations/{self.conv.id}/upload/',
             {'file': audio, 'message_type': 'VOICE', 'client_message_id': 'v1', 'duration': '5', 'session_token': str(self.session.token)},
@@ -132,6 +132,24 @@ class RichMessageFlowTests(TransactionTestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
         history = self.client.get(f'/api/v1/conversations/{self.conv.id}/messages/')
         self.assertTrue(history.data[0]['seen'])
+
+    def test_product_snapshot_survives_later_product_edit(self):
+        product = Product.objects.create(workspace=self.workspace, name='Candle', brand='Arom', price=890000)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        res = self.client.post(
+            f'/api/v1/conversations/customer/{self.conv.id}/share_product/',
+            {'product_id': str(product.id), 'client_message_id': 'snap1'},
+            format='json',
+        )
+        self.assertEqual(res.status_code, 201)
+
+        product.name = 'Renamed Candle'
+        product.price = 500000
+        product.save(update_fields=['name', 'price'])
+
+        msg = Message.objects.get(client_message_id='snap1')
+        self.assertEqual(msg.metadata['name'], 'Candle')
+        self.assertEqual(msg.metadata['price'], '890000')
 
     def test_product_list_scoped_to_workspace(self):
         Product.objects.create(workspace=self.workspace, name='Mine', brand='Arom', price=1000)
