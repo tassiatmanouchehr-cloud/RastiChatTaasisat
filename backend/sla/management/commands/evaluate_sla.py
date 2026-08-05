@@ -151,6 +151,8 @@ class Command(BaseCommand):
                 reason=f'SLA {clock_name} breach', reason_code=PriorityChange.Reason.SLA_BREACH,
             )
         self._broadcast(conv.id, 'conversation.sla_breached', {'conversation_id': str(conv.id), 'clock': clock_name})
+        from automations.events import publish_event
+        publish_event('SLA_BREACHED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM', payload={'clock': clock_name})
 
     def _on_approaching(self, conv, clock_name, due_at):
         AuditEvent.objects.create(
@@ -163,6 +165,8 @@ class Command(BaseCommand):
                 f'SLA {clock_name} برای این گفتگو در حال نزدیک شدن است', {'conversation_id': str(conv.id), 'clock': clock_name},
             )
         self._broadcast(conv.id, 'conversation.sla_approaching', {'conversation_id': str(conv.id), 'clock': clock_name})
+        from automations.events import publish_event
+        publish_event('SLA_APPROACHING', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM', payload={'clock': clock_name})
 
     @staticmethod
     def _broadcast(conv_id, event_type, data):

@@ -238,28 +238,26 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
         )
         data = InternalNoteSerializer(note, context={'request': request}).data
         conv_services.broadcast_ops_event(conv.id, 'conversation.internal_note_created', {'note': data})
+        from automations.events import publish_event
+        publish_event(
+            'INTERNAL_NOTE_CREATED', conv.workspace_id, conversation_id=conv.id,
+            actor_id=request.user.id, actor_type='USER', payload={'content': body},
+        )
         return Response(data, status=201)
 
     @action(detail=True, methods=['post'])
     def close(self, request, pk=None):
-        from sla.services import mark_resolved
         conv = self.get_object()
-        conv.status = Conversation.Status.CLOSED
-        conv.closed_at = timezone.now()
-        conv.save()
-        mark_resolved(conv)
+        conv = conv_services.close_conversation(conv, actor=request.user)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
     def reopen(self, request, pk=None):
-        from sla.services import mark_reopened
         conv = self.get_object()
-        if conv.status != Conversation.Status.CLOSED:
-            return Response({'error': 'Conversation is not closed'}, status=status.HTTP_400_BAD_REQUEST)
-        conv.status = Conversation.Status.OPEN
-        conv.closed_at = None
-        conv.save()
-        mark_reopened(conv)
+        try:
+            conv = conv_services.reopen_conversation(conv, actor=request.user)
+        except conv_services.ConversationServiceError as exc:
+            return Response({'error': exc.message}, status=exc.status_code)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['get'])
@@ -365,6 +363,8 @@ class StartCustomerChatView(APIView):
         if created:
             from queues.services import route_new_conversation
             from sla.services import apply_sla
+            from automations.events import publish_event
+            publish_event('CONVERSATION_CREATED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM')
             conv = route_new_conversation(conv)
             apply_sla(conv)
             conv_services.broadcast_ops_event(conv.id, 'conversation.queued', conv_services.conversation_summary(conv))
@@ -400,6 +400,11 @@ class SendMessageView(APIView):
         from sla.services import mark_first_response, clear_next_response
         mark_first_response(conv)
         clear_next_response(conv)
+        from automations.events import publish_event
+        publish_event(
+            'OPERATOR_MESSAGE_CREATED', conv.workspace_id, conversation_id=conv.id,
+            actor_id=request.user.id, actor_type='USER', payload={'content': msg.content, 'message_type': msg.message_type, 'sender_type': 'USER'},
+        )
         data = MessageSerializer(msg, context={'request': request}).data
         _broadcast(conv_id, data)
         return Response(data, status=201)
@@ -518,6 +523,8 @@ class WidgetRateConversationView(APIView):
         _broadcast(conv.id, MessageSerializer(msg, context={'request': request}).data)
         conv.rating = rating
         conv.save(update_fields=['rating'])
+        from automations.events import publish_event
+        publish_event('RATING_SUBMITTED', conv.workspace_id, conversation_id=conv.id, actor_type='VISITOR', payload={'rating': rating})
         return Response(ConversationSerializer(conv).data, status=200)
 
 # --- PLATFORM SUPPORT VIEWS ---

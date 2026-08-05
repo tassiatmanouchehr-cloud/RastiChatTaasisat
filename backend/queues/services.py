@@ -12,6 +12,7 @@ from django.db import transaction
 from accounts.models import OperatorPresence
 from accounts.presence import touch_presence
 from teams.models import TeamMembership
+from automations.events import publish_event
 from .models import Queue
 
 
@@ -85,6 +86,10 @@ def auto_assign(conversation, queue, depth=0):
             conversation=conv, action=Assignment.Action.AUTO_ASSIGN, assigned_to=agent,
             new_team=queue.team, reason=f'Auto-assigned via {queue.assignment_strategy}',
         )
+    publish_event(
+        'CONVERSATION_ASSIGNED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM',
+        payload={'assigned_to': str(agent.id), 'strategy': queue.assignment_strategy},
+    )
     return conv
 
 
@@ -110,6 +115,11 @@ def route_to_queue(conversation, queue, actor=None):
                 reason_code=PriorityChange.Reason.QUEUE_DEFAULT, reason=f'Entered queue "{queue.name}"',
             )
         conv.save(update_fields=update_fields)
+    publish_event(
+        'CONVERSATION_QUEUED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+        payload={'queue_id': str(queue.id)},
+    )
     if queue.assignment_strategy != Queue.Strategy.MANUAL:
         conv = auto_assign(conv, queue)
     return conv
@@ -159,4 +169,8 @@ def claim_conversation(conversation, user):
         actor=user, action='conversation_claimed', target_type='conversation', target_id=str(conv.id),
     )
     broadcast_ops_event(conv.id, 'conversation.assigned', conversation_summary(conv))
+    publish_event(
+        'CONVERSATION_ASSIGNED', conv.workspace_id, conversation_id=conv.id, actor_id=user.id, actor_type='USER',
+        payload={'assigned_to': str(user.id), 'claimed': True},
+    )
     return conv

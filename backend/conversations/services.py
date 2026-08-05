@@ -20,6 +20,7 @@ from audit.models import AuditEvent
 from teams.models import Team, TeamMembership
 from notifications.services import notify
 from notifications.models import Notification
+from automations.events import publish_event
 
 User = get_user_model()
 
@@ -98,11 +99,16 @@ def _reassign(conversation, actor, target_user, action_reason=''):
         )
     _audit(actor, 'conversation_assigned', conv, {'assigned_to': str(target_user.id)})
     broadcast_ops_event(conv.id, 'conversation.assigned', conversation_summary(conv))
-    if str(target_user.id) != str(actor.id):
+    if actor is None or str(target_user.id) != str(actor.id):
         notify(
             target_user, conv.workspace, Notification.EventType.CONVERSATION_ASSIGNED,
             'گفتگویی به شما واگذار شد', {'conversation_id': str(conv.id)},
         )
+    publish_event(
+        'CONVERSATION_ASSIGNED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+        payload={'assigned_to': str(target_user.id)},
+    )
     return conv
 
 
@@ -124,6 +130,10 @@ def unassign(conversation, actor, reason=''):
         )
     _audit(actor, 'conversation_unassigned', conv, {})
     broadcast_ops_event(conv.id, 'conversation.unassigned', conversation_summary(conv))
+    publish_event(
+        'CONVERSATION_UNASSIGNED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+    )
     return conv
 
 
@@ -141,6 +151,10 @@ def return_to_queue(conversation, actor, reason=''):
         )
     _audit(actor, 'conversation_returned_to_queue', conv, {})
     broadcast_ops_event(conv.id, 'conversation.queued', conversation_summary(conv))
+    publish_event(
+        'CONVERSATION_QUEUED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+    )
     if conv.queue_id and conv.queue.assignment_strategy != conv.queue.Strategy.MANUAL:
         from queues.services import auto_assign
         conv = auto_assign(conv, conv.queue)
@@ -172,6 +186,11 @@ def transfer_team(conversation, actor, new_team_id, reason=''):
         'previous_team': str(previous_team.id) if previous_team else None, 'new_team': str(new_team.id),
     })
     broadcast_ops_event(conv.id, 'conversation.transferred', conversation_summary(conv))
+    publish_event(
+        'CONVERSATION_TRANSFERRED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+        payload={'new_team': str(new_team.id)},
+    )
     return conv
 
 
@@ -209,6 +228,10 @@ def escalate(conversation, actor, reason=''):
             supervisor, conv.workspace, Notification.EventType.ESCALATION_RECEIVED,
             'یک گفتگو به شما تشدید شد', {'conversation_id': str(conv.id)},
         )
+    publish_event(
+        'CONVERSATION_ESCALATED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+    )
     return conv
 
 
@@ -230,4 +253,55 @@ def set_priority(conversation, actor, priority, reason='', reason_code=None):
         )
     _audit(actor, 'conversation_priority_changed', conv, {'from': previous_priority, 'to': priority})
     broadcast_ops_event(conv.id, 'conversation.priority_updated', conversation_summary(conv))
+    publish_event(
+        'CONVERSATION_PRIORITY_CHANGED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+        payload={'from': previous_priority, 'to': priority},
+    )
+    return conv
+
+
+def close_conversation(conversation, actor=None):
+    """Shared by CustomerConversationViewSet.close and the CLOSE_CONVERSATION
+    automation action — a single, safe implementation instead of two.
+    """
+    from .models import Conversation
+    from sla.services import mark_resolved
+
+    with transaction.atomic():
+        conv = Conversation.objects.select_for_update().get(pk=conversation.pk)
+        conv.status = Conversation.Status.CLOSED
+        conv.closed_at = timezone.now()
+        conv.save(update_fields=['status', 'closed_at'])
+    mark_resolved(conv)
+    publish_event(
+        'CONVERSATION_CLOSED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+    )
+    publish_event(
+        'CONVERSATION_RESOLVED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+    )
+    return conv
+
+
+def reopen_conversation(conversation, actor=None):
+    """Shared by CustomerConversationViewSet.reopen and the
+    REOPEN_CONVERSATION automation action.
+    """
+    from .models import Conversation
+    from sla.services import mark_reopened
+
+    with transaction.atomic():
+        conv = Conversation.objects.select_for_update().get(pk=conversation.pk)
+        if conv.status != Conversation.Status.CLOSED:
+            raise ConversationServiceError('Conversation is not closed', 400)
+        conv.status = Conversation.Status.OPEN
+        conv.closed_at = None
+        conv.save(update_fields=['status', 'closed_at'])
+    mark_reopened(conv)
+    publish_event(
+        'CONVERSATION_REOPENED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+    )
     return conv

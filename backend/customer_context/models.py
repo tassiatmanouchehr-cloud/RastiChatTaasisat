@@ -72,6 +72,10 @@ class CustomerProfile(models.Model):
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='customer_profiles')
     location = models.CharField(max_length=255, blank=True, default='')
     score = models.DecimalField(max_digits=3, decimal_places=1, null=True, blank=True)
+    # Free-form operator-editable key/value data, read (never written) by
+    # automation conditions via a whitelisted-key, safe dict lookup — not
+    # arbitrary ORM/attribute traversal. See automations/conditions.py.
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
