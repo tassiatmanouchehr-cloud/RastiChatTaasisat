@@ -12,6 +12,9 @@ from catalog.models import Product
 from teams.models import Team, TeamMembership
 from queues.models import Queue
 from sla.models import SLAPolicy
+from customer_context.models import Tag
+from knowledge_base.models import KnowledgeBaseCategory
+from macros.models import Macro
 
 print("Seeding database...")
 
@@ -77,6 +80,92 @@ sample_products = [
 ]
 for p in sample_products:
     Product.objects.get_or_create(workspace=ws, name=p['name'], defaults=p)
+
+# 9. Knowledge Base starter categories — inactive drafts, admin review
+# required before they're usable. Never published/active by default (spec
+# section 15): an admin must deliberately activate each one.
+kb_starter_categories = [
+    'سفارش‌ها', 'پرداخت', 'ارسال', 'مرجوعی', 'حساب کاربری', 'محصولات', 'مشکلات فنی',
+]
+for i, name in enumerate(kb_starter_categories):
+    KnowledgeBaseCategory.objects.get_or_create(
+        workspace=ws, slug=f'starter-{i}-{name}', defaults={'name': name, 'is_active': False, 'sort_order': i},
+    )
+
+# 10. Macro starter templates — inactive, WORKSPACE-visibility drafts that
+# reference only resources this same seed already created (sales_team,
+# tech_team, real tags). Never active by default — an admin must review and
+# activate each one (spec section 15).
+refund_tag, _ = Tag.objects.get_or_create(workspace=ws, name='مرجوعی', defaults={'color': '#e67e22'})
+damaged_tag, _ = Tag.objects.get_or_create(workspace=ws, name='آسیب‌دیده', defaults={'color': '#c0392b'})
+payment_tag, _ = Tag.objects.get_or_create(workspace=ws, name='مشکل پرداخت', defaults={'color': '#8e44ad'})
+
+macro_templates = [
+    {
+        'name': 'درخواست مرجوعی', 'category': 'مرجوعی',
+        'actions': [
+            {'type': 'SEND_REPLY', 'params': {'template': 'سلام {customer_name}، درخواست مرجوعی شما ثبت شد و به‌زودی بررسی می‌شود.'}},
+            {'type': 'ADD_TAG', 'params': {'tag_id': str(refund_tag.id)}},
+            {'type': 'SET_PRIORITY', 'params': {'priority': 'HIGH'}},
+            {'type': 'TRANSFER_TO_TEAM', 'params': {'team_id': str(sales_team.id), 'reason': 'درخواست مرجوعی'}},
+            {'type': 'CREATE_INTERNAL_NOTE', 'params': {'content': 'نیاز به بررسی و تأیید مرجوعی توسط تیم فروش.'}},
+            {'type': 'SET_STATUS', 'params': {'status': 'WAITING_FOR_WORKSPACE'}},
+        ],
+    },
+    {
+        'name': 'پیگیری سفارش', 'category': 'سفارش‌ها',
+        'actions': [
+            {'type': 'SEND_REPLY', 'params': {'template': 'سلام {customer_name}، سفارش شما (شماره {order_number}) در حال بررسی است.'}},
+        ],
+    },
+    {
+        'name': 'محصول آسیب‌دیده', 'category': 'مرجوعی',
+        'actions': [
+            {'type': 'SEND_REPLY', 'params': {'template': 'سلام {customer_name}، بابت این مشکل عذرخواهی می‌کنیم. لطفاً تصویری از {product_name} آسیب‌دیده ارسال کنید.'}},
+            {'type': 'ADD_TAG', 'params': {'tag_id': str(damaged_tag.id)}},
+            {'type': 'ASSIGN_TO_TEAM', 'params': {'team_id': str(sales_team.id)}},
+            {'type': 'SET_PRIORITY', 'params': {'priority': 'HIGH'}},
+        ],
+    },
+    {
+        'name': 'مشکل پرداخت', 'category': 'پرداخت',
+        'actions': [
+            {'type': 'SEND_REPLY', 'params': {'template': 'سلام {customer_name}، مشکل پرداخت شما را بررسی می‌کنیم.'}},
+            {'type': 'ADD_TAG', 'params': {'tag_id': str(payment_tag.id)}},
+            {'type': 'SET_PRIORITY', 'params': {'priority': 'HIGH'}},
+        ],
+    },
+    {
+        'name': 'انتقال به تیم فنی', 'category': 'مشکلات فنی',
+        'actions': [
+            {'type': 'TRANSFER_TO_TEAM', 'params': {'team_id': str(tech_team.id), 'reason': 'مشکل فنی'}},
+            {'type': 'CREATE_INTERNAL_NOTE', 'params': {'content': 'به تیم فنی ارجاع داده شد.'}},
+        ],
+    },
+    {
+        'name': 'درخواست تصویر', 'category': 'مرجوعی',
+        'actions': [
+            {'type': 'SEND_REPLY', 'params': {'template': 'سلام {customer_name}، لطفاً یک تصویر واضح از موضوع ارسال کنید تا سریع‌تر بررسی شود.'}},
+        ],
+    },
+    {
+        'name': 'پایان موفق گفتگو', 'category': 'عمومی',
+        'actions': [
+            {'type': 'SEND_REPLY', 'params': {'template': 'سلام {customer_name}، خوشحالیم که توانستیم کمک کنیم. روز خوبی داشته باشید!'}},
+            {'type': 'REQUEST_RATING', 'params': {}},
+            {'type': 'CLOSE_CONVERSATION', 'params': {}},
+        ],
+    },
+]
+for template in macro_templates:
+    Macro.objects.get_or_create(
+        workspace=ws, name=template['name'],
+        defaults={
+            'category': template['category'], 'actions': template['actions'],
+            'visibility': Macro.Visibility.WORKSPACE, 'is_active': False,
+            'description': 'قالب آماده — قبل از استفاده توسط مدیر فضای‌کار بررسی و فعال شود.',
+        },
+    )
 
 print("\n=== Seed Data Created Successfully ===")
 print("Operator Login   : operator@ws.com / pass1234")
