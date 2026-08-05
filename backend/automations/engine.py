@@ -23,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from django.db import models
+from django.db import models, transaction
 from django.db.utils import IntegrityError
 from django.utils import timezone
 
@@ -45,11 +45,18 @@ class ActionRunContext:
 
 
 def _record_event_once(event):
+    # The atomic() here is a savepoint, not a new top-level transaction: if
+    # this insert collides on the event_id primary key (already processed),
+    # only this savepoint rolls back — an enclosing transaction (if any,
+    # e.g. a caller that hasn't gone through publish_event's on_commit
+    # deferral) must not be left in Postgres's "aborted until rollback"
+    # state by an uncaught-at-the-right-level IntegrityError.
     try:
-        AutomationEvent.objects.create(
-            event_id=event.event_id, event_type=event.event_type, workspace_id=event.workspace_id,
-            correlation_id=event.correlation_id, depth=event.depth,
-        )
+        with transaction.atomic():
+            AutomationEvent.objects.create(
+                event_id=event.event_id, event_type=event.event_type, workspace_id=event.workspace_id,
+                correlation_id=event.correlation_id, depth=event.depth,
+            )
         return True
     except IntegrityError:
         return False
