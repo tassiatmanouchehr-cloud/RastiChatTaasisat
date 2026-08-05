@@ -17,11 +17,16 @@ test.describe('Team operations, queues and SLA', () => {
     // active_conversation_count accumulates across a full test run; without
     // this, claim/auto-assign tests can spuriously hit the default
     // max_capacity=10 ceiling well before the suite finishes.
+    // get_or_create, not `u.presence` — on a genuinely fresh database
+    // (drop/recreate/migrate/seed, no prior login/WS activity for these
+    // users) OperatorPresence rows don't exist yet, and the direct reverse
+    // accessor raises RelatedObjectDoesNotExist. Real seeded users on a
+    // real fresh DB must not depend on incidental prior activity.
     runDjangoScript(`
-from accounts.models import User
+from accounts.models import User, OperatorPresence
 for email in ['operator@ws.com', 'operator2@ws.com']:
     u = User.objects.get(email=email)
-    p = u.presence
+    p, _ = OperatorPresence.objects.get_or_create(user=u, defaults={'status': OperatorPresence.Status.OFFLINE})
     p.max_capacity = 50
     p.save(update_fields=['max_capacity'])
 `);
@@ -288,11 +293,11 @@ touch_presence(op2, explicit_status='ONLINE')
     // model default) and remove the throwaway high-priority queue so
     // neither leaks into later tests' routing/claim assumptions.
     runDjangoScript(`
-from accounts.models import User
+from accounts.models import User, OperatorPresence
 from workspaces.models import Workspace
 from queues.models import Queue
 op1 = User.objects.get(email='operator@ws.com')
-presence = op1.presence
+presence, _ = OperatorPresence.objects.get_or_create(user=op1, defaults={'status': OperatorPresence.Status.OFFLINE})
 presence.max_capacity = 50
 presence.save(update_fields=['max_capacity'])
 ws = Workspace.objects.get(name='Sample Workspace')
