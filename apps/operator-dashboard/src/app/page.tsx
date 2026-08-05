@@ -843,6 +843,7 @@ export default function DashboardPage() {
                             )}
                         </div>
                         <Link href="/supervisor" className="text-xs text-gray-400 hover:text-terracotta" title="داشبورد سرپرستی">📊</Link>
+                        <Link href="/automations" className="text-xs text-gray-400 hover:text-terracotta" title="اتوماسیون‌ها">⚙️</Link>
                         <button onClick={handleLogout} className="text-xs text-gray-400 hover:text-red-500">خروج</button>
                     </div>
                 </div>

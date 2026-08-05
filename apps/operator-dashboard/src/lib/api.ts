@@ -400,3 +400,108 @@ export const connectSupportWebSocket = (convId: string, onMessage: (data: any) =
     ws.onmessage = (event) => onMessage(JSON.parse(event.data));
     return ws;
 };
+
+// --- Automation rules ---
+
+const authedJson = (method: string, body?: unknown) => ({
+    method,
+    headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+});
+
+export const fetchAutomationRules = async (params?: { trigger_type?: string; is_active?: boolean }) => {
+    const qs = new URLSearchParams();
+    if (params?.trigger_type) qs.set('trigger_type', params.trigger_type);
+    if (params?.is_active !== undefined) qs.set('is_active', String(params.is_active));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await fetch(`${API_BASE}/automations/rules/${suffix}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (res.status === 403) throw new Error('403: دسترسی به اتوماسیون‌ها فقط برای مدیران فضای کاری است');
+    if (!res.ok) throw new Error('Failed to fetch automation rules');
+    const data = await res.json();
+    return data.results ?? data;
+};
+
+export const createAutomationRule = async (payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/automations/rules/`, authedJson('POST', payload));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(JSON.stringify(body)); }
+    return res.json();
+};
+
+export const updateAutomationRule = async (id: string, payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/automations/rules/${id}/`, authedJson('PATCH', payload));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(JSON.stringify(body)); }
+    return res.json();
+};
+
+export const deleteAutomationRule = async (id: string) => {
+    const res = await fetch(`${API_BASE}/automations/rules/${id}/`, authedJson('DELETE'));
+    if (!res.ok) throw new Error('Failed to delete rule');
+};
+
+export const activateAutomationRule = async (id: string) => {
+    const res = await fetch(`${API_BASE}/automations/rules/${id}/activate/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to activate rule');
+    return res.json();
+};
+
+export const deactivateAutomationRule = async (id: string) => {
+    const res = await fetch(`${API_BASE}/automations/rules/${id}/deactivate/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to deactivate rule');
+    return res.json();
+};
+
+export const duplicateAutomationRule = async (id: string) => {
+    const res = await fetch(`${API_BASE}/automations/rules/${id}/duplicate/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to duplicate rule');
+    return res.json();
+};
+
+export const simulateAutomationRule = async (id: string, conversationId?: string) => {
+    const res = await fetch(`${API_BASE}/automations/rules/${id}/simulate/`, authedJson('POST', { conversation_id: conversationId || undefined }));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || 'Failed to simulate rule'); }
+    return res.json();
+};
+
+export const validateAutomationDraft = async (conditions: unknown, actions: unknown) => {
+    const res = await fetch(`${API_BASE}/automations/validate/`, authedJson('POST', { conditions, actions }));
+    return res.json();
+};
+
+export const simulateAutomationDraft = async (triggerType: string, conditions: unknown, actions: unknown, conversationId?: string) => {
+    const res = await fetch(`${API_BASE}/automations/simulate/`, authedJson('POST', {
+        trigger_type: triggerType, conditions, actions, conversation_id: conversationId || undefined,
+    }));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error ? JSON.stringify(body.error) : 'Failed to simulate'); }
+    return res.json();
+};
+
+export const fetchAutomationRegistry = async () => {
+    const res = await fetch(`${API_BASE}/automations/registry/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch automation registry');
+    return res.json();
+};
+
+export const fetchAutomationExecutionHistory = async (params?: { rule?: string; status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.rule) qs.set('rule', params.rule);
+    if (params?.status) qs.set('status', params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await fetch(`${API_BASE}/automations/execution-history/${suffix}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch execution history');
+    return res.json();
+};
+
+export const fetchScheduledActions = async (params?: { status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set('status', params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await fetch(`${API_BASE}/automations/scheduled-actions/${suffix}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch scheduled actions');
+    return res.json();
+};
+
+export const cancelScheduledAction = async (id: string) => {
+    const res = await fetch(`${API_BASE}/automations/scheduled-actions/${id}/cancel/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to cancel scheduled action');
+    return res.json();
+};
