@@ -54,15 +54,27 @@ class OperatorPresence(models.Model):
     class Status(models.TextChoices):
         ONLINE = 'ONLINE', 'Online'
         AWAY = 'AWAY', 'Away'
+        BUSY = 'BUSY', 'Busy'
+        DO_NOT_DISTURB = 'DO_NOT_DISTURB', 'Do Not Disturb'
         OFFLINE = 'OFFLINE', 'Offline'
 
-    # Explicit, operator-set status (e.g. via the dashboard's status dropdown).
+    # Statuses the operator chose deliberately — activity pings never
+    # silently override them the way a stale ONLINE/AWAY claim gets decayed.
+    EXPLICIT_STATUSES = (Status.OFFLINE, Status.BUSY, Status.DO_NOT_DISTURB)
+
     ONLINE_STALE_AFTER = timedelta(minutes=2)
     AWAY_STALE_AFTER = timedelta(minutes=10)
 
+    DEFAULT_MAX_CAPACITY = 10
+
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='presence')
-    status = models.CharField(max_length=10, choices=Status.choices, default=Status.OFFLINE)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OFFLINE)
     last_active_at = models.DateTimeField(auto_now=True)
+    # Configurable per-agent capacity ceiling, used by automatic assignment
+    # (LEAST_ACTIVE strategy and the at-capacity exclusion). Live count of
+    # currently-active conversations is computed on demand, never stored,
+    # so it can never drift.
+    max_capacity = models.PositiveIntegerField(default=DEFAULT_MAX_CAPACITY)
 
     def touch(self, status=None):
         """Record activity (WS connect, message send, mark-read) and optionally set an explicit status."""
@@ -74,12 +86,27 @@ class OperatorPresence(models.Model):
         self.save(update_fields=['status', 'last_active_at'])
 
     def effective_status(self):
-        """Explicit OFFLINE always wins; otherwise staleness of last activity overrides a stale ONLINE/AWAY claim."""
-        if self.status == self.Status.OFFLINE:
-            return self.Status.OFFLINE
+        """A deliberately-chosen status (OFFLINE/BUSY/DND) always wins; otherwise
+        staleness of last activity overrides a stale ONLINE/AWAY claim.
+        """
+        if self.status in self.EXPLICIT_STATUSES:
+            return self.status
         age = timezone.now() - self.last_active_at
         if age > self.AWAY_STALE_AFTER:
             return self.Status.OFFLINE
         if age > self.ONLINE_STALE_AFTER:
             return self.Status.AWAY
         return self.status
+
+    def active_conversation_count(self):
+        """Live count of conversations currently assigned to this agent that
+        aren't in a terminal state — never stored/denormalized.
+        """
+        from conversations.models import Conversation
+        return Conversation.objects.filter(
+            assigned_to=self.user,
+        ).exclude(status__in=[Conversation.Status.CLOSED, Conversation.Status.RESOLVED]).count()
+
+    def is_at_capacity(self, capacity_override=None):
+        capacity = capacity_override if capacity_override is not None else self.max_capacity
+        return self.active_conversation_count() >= capacity

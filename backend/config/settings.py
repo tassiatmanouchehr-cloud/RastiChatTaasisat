@@ -31,6 +31,11 @@ INSTALLED_APPS = [
     'customer_context',
     'audit',
     'common',
+    'teams',
+    'queues',
+    'sla',
+    'collaboration',
+    'notifications',
 ]
 
 MIDDLEWARE = [

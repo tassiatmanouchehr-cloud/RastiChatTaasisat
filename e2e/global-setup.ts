@@ -13,11 +13,17 @@ export default function globalSetup() {
 import json
 from projects.models import Project
 from catalog.models import Product
+from teams.models import Team
+from queues.models import Queue
 project = Project.objects.get(name='Sample Website')
 product = Product.objects.filter(workspace=project.workspace).first()
+team = Team.objects.filter(workspace=project.workspace, name='فروش').first()
+queue = Queue.objects.filter(workspace=project.workspace, name='صف فروش').first()
 print('FIXTURE_JSON=' + json.dumps({
     'projectKey': str(project.public_key),
     'productId': str(product.id) if product else None,
+    'teamId': str(team.id) if team else None,
+    'queueId': str(queue.id) if queue else None,
 }))
 `;
 

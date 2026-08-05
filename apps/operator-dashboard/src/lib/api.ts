@@ -99,6 +99,150 @@ export const fetchTeammates = async (convId: string) => {
     return res.json();
 };
 
+// --- Team operations, queues, priority, SLA ---
+
+export const fetchTeams = async () => {
+    const res = await fetch(`${API_BASE}/teams/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch teams');
+    const data = await res.json();
+    return data.results ?? data;
+};
+
+export const fetchQueues = async () => {
+    const res = await fetch(`${API_BASE}/queues/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch queues');
+    const data = await res.json();
+    return data.results ?? data;
+};
+
+export const claimConversation = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/claim/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Failed to claim conversation');
+    }
+    return res.json();
+};
+
+export const transferConversation = async (convId: string, teamId: string, reason?: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/transfer/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_id: teamId, reason: reason || '' }),
+    });
+    if (!res.ok) throw new Error('Failed to transfer conversation');
+    return res.json();
+};
+
+export const escalateConversation = async (convId: string, reason?: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/escalate/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason || '' }),
+    });
+    if (!res.ok) throw new Error('Failed to escalate conversation');
+    return res.json();
+};
+
+export const setConversationPriority = async (convId: string, priority: string, reason?: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/set_priority/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priority, reason: reason || '' }),
+    });
+    if (!res.ok) throw new Error('Failed to update priority');
+    return res.json();
+};
+
+export const fetchAssignmentHistory = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/assignment_history/`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to fetch assignment history');
+    return res.json();
+};
+
+export const fetchSupervisorSummary = async () => {
+    const res = await fetch(`${API_BASE}/supervisor/summary/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (res.status === 403) throw new Error('403: Not authorized to view the supervisor summary');
+    if (!res.ok) throw new Error('Failed to fetch supervisor summary');
+    return res.json();
+};
+
+// --- Internal notes & mentions ---
+
+export const fetchInternalNotes = async (convId: string) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/internal_notes/`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to fetch internal notes');
+    return res.json();
+};
+
+export const createInternalNote = async (convId: string, content: string, clientId: string, mentionedUserIds: string[] = []) => {
+    const res = await fetch(`${API_BASE}/conversations/customer/${convId}/internal_notes/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, client_message_id: clientId, mentioned_user_ids: mentionedUserIds }),
+    });
+    if (!res.ok) throw new Error('Failed to create internal note');
+    return res.json();
+};
+
+// --- Managed quick replies ---
+
+export const fetchQuickReplies = async (search?: string) => {
+    const qs = search?.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
+    const res = await fetch(`${API_BASE}/quick-replies/${qs}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch quick replies');
+    const data = await res.json();
+    return data.results ?? data;
+};
+
+export const applyQuickReply = async (replyId: string, convId?: string) => {
+    const res = await fetch(`${API_BASE}/quick-replies/${replyId}/use/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: convId }),
+    });
+    if (!res.ok) throw new Error('Failed to use quick reply');
+    return res.json();
+};
+
+// --- Notifications ---
+
+export const fetchNotifications = async () => {
+    const res = await fetch(`${API_BASE}/notifications/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch notifications');
+    const data = await res.json();
+    return data.results ?? data;
+};
+
+export const fetchUnreadNotificationCount = async () => {
+    const res = await fetch(`${API_BASE}/notifications/unread_count/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch unread count');
+    return res.json();
+};
+
+export const markNotificationRead = async (notifId: string) => {
+    const res = await fetch(`${API_BASE}/notifications/${notifId}/mark_read/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to mark notification read');
+    return res.json();
+};
+
+export const markAllNotificationsRead = async () => {
+    const res = await fetch(`${API_BASE}/notifications/mark_all_read/`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new Error('Failed to mark all notifications read');
+};
+
+export const connectNotificationsWebSocket = <T,>(onMessage: (data: T) => void) => {
+    const token = getToken();
+    const ws = new WebSocket(`${WS_BASE}/notifications/${token}/`);
+    ws.onmessage = (event) => onMessage(JSON.parse(event.data) as T);
+    return ws;
+};
+
 export const uploadAttachment = async (convId: string, file: File, messageType: 'IMAGE' | 'VOICE', clientId: string, extra?: Record<string, string>) => {
     const form = new FormData();
     form.append('file', file);

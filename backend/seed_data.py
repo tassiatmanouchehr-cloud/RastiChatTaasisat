@@ -9,6 +9,9 @@ from platforms.models import Platform, PlatformMembership
 from workspaces.models import Workspace, WorkspaceMembership
 from projects.models import Project
 from catalog.models import Product
+from teams.models import Team, TeamMembership
+from queues.models import Queue
+from sla.models import SLAPolicy
 
 print("Seeding database...")
 
@@ -33,6 +36,31 @@ wo, created = User.objects.get_or_create(email='operator@ws.com', defaults={'is_
 if created: wo.set_password('pass1234'); wo.save()
 WorkspaceMembership.objects.get_or_create(user=wo, workspace=ws, defaults={'role': 'WORKSPACE_OPERATOR'})
 
+# 5b. Second workspace operator, used by E2E claim-race / transfer scenarios
+wo2, created = User.objects.get_or_create(email='operator2@ws.com', defaults={'is_staff': True, 'display_name': 'همکار دو'})
+if created: wo2.set_password('pass1234'); wo2.save()
+WorkspaceMembership.objects.get_or_create(user=wo2, workspace=ws, defaults={'role': 'WORKSPACE_OPERATOR'})
+
+# 5c. A team both operators belong to, plus a queue and a short-fuse SLA
+# policy so E2E can deterministically exercise approaching/breach states
+# without waiting on real wall-clock time.
+sales_team, _ = Team.objects.get_or_create(workspace=ws, name='فروش', defaults={'description': 'تیم فروش و پشتیبانی مشتریان'})
+TeamMembership.objects.get_or_create(team=sales_team, user=wo, defaults={'role': 'MEMBER', 'is_active': True})
+TeamMembership.objects.get_or_create(team=sales_team, user=wo2, defaults={'role': 'SUPERVISOR', 'is_active': True})
+
+sales_queue, _ = Queue.objects.get_or_create(
+    workspace=ws, name='صف فروش', defaults={'team': sales_team, 'assignment_strategy': Queue.Strategy.MANUAL},
+)
+
+# A second team, used as the transfer destination in E2E.
+tech_team, _ = Team.objects.get_or_create(workspace=ws, name='فنی', defaults={'description': 'پشتیبانی فنی'})
+TeamMembership.objects.get_or_create(team=tech_team, user=wo2, defaults={'role': 'MEMBER', 'is_active': True})
+
+SLAPolicy.objects.get_or_create(
+    workspace=ws, name='Fast E2E SLA',
+    defaults={'first_response_target_minutes': 1, 'resolution_target_minutes': 2, 'is_active': True},
+)
+
 # 6. Create Platform Support Agent
 psa, created = User.objects.get_or_create(email='support@platform.com', defaults={'is_staff': True})
 if created: psa.set_password('pass1234'); psa.save()
@@ -52,7 +80,10 @@ for p in sample_products:
 
 print("\n=== Seed Data Created Successfully ===")
 print("Operator Login   : operator@ws.com / pass1234")
+print("Operator 2 Login : operator2@ws.com / pass1234")
 print("Admin Login      : admin@ws.com / pass1234")
 print("Platform Support : support@platform.com / pass1234")
 print(f"Project Public Key: {proj.public_key}")
+print(f"Sales Team ID: {sales_team.id}")
+print(f"Sales Queue ID: {sales_queue.id}")
 print("======================================")

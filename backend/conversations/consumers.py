@@ -37,6 +37,45 @@ class BaseChatConsumer(AsyncJsonWebsocketConsumer):
         # both consumer types need a handler or Channels errors on dispatch.
         await self.send_json({'type': 'branding.updated', 'branding': event['branding']})
 
+
+class OpsEventsMixin:
+    """Operator-only realtime events, delivered on the `chat_ops_<id>` group
+    that only DashboardChatConsumer ever joins — never the widget socket, so
+    none of these can leak to a customer. Each handler just forwards the
+    event dict as-is: it already carries the original dotted `type` plus
+    whatever JSON-safe payload the sender included, giving every event a
+    stable envelope of `{type, ...}`.
+    """
+    async def conversation_queued(self, event):
+        await self.send_json(event)
+
+    async def conversation_assigned(self, event):
+        await self.send_json(event)
+
+    async def conversation_unassigned(self, event):
+        await self.send_json(event)
+
+    async def conversation_transferred(self, event):
+        await self.send_json(event)
+
+    async def conversation_escalated(self, event):
+        await self.send_json(event)
+
+    async def conversation_priority_updated(self, event):
+        await self.send_json(event)
+
+    async def conversation_sla_updated(self, event):
+        await self.send_json(event)
+
+    async def conversation_sla_approaching(self, event):
+        await self.send_json(event)
+
+    async def conversation_sla_breached(self, event):
+        await self.send_json(event)
+
+    async def internal_note_created(self, event):
+        await self.send_json(event)
+
 class WidgetChatConsumer(BaseChatConsumer):
     async def connect(self):
         self.session_token = self.scope['url_route']['kwargs']['session_token']
@@ -79,22 +118,27 @@ class WidgetChatConsumer(BaseChatConsumer):
     @database_sync_to_async
     def _save_visitor_message(self, client_msg_id, msg_text):
         if Message.objects.filter(conversation=self.conversation, client_message_id=client_msg_id).exists(): return None
-        return Message.objects.create(conversation=self.conversation, sender_type=Message.SenderType.VISITOR, sender_visitor=self.conversation.visitor, content=msg_text, client_message_id=client_msg_id)
+        msg = Message.objects.create(conversation=self.conversation, sender_type=Message.SenderType.VISITOR, sender_visitor=self.conversation.visitor, content=msg_text, client_message_id=client_msg_id)
+        from sla.services import recalculate_next_response
+        recalculate_next_response(self.conversation)
+        return msg
 
     @database_sync_to_async
     def _mark_read(self):
         for msg in self.conversation.messages.exclude(receipts__visitor=self.conversation.visitor).exclude(sender_type=Message.SenderType.VISITOR):
             MessageReceipt.objects.create(message=msg, visitor=self.conversation.visitor)
 
-class DashboardChatConsumer(BaseChatConsumer):
+class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
     async def connect(self):
         self.token = self.scope['url_route']['kwargs']['token']
         self.conv_id = self.scope['url_route']['kwargs']['conv_id']
         self.conversation = await self._get_user_conversation()
         if not self.conversation: await self.close(); return
         self.group_name = f"chat_{self.conv_id}"
+        self.ops_group_name = f"chat_ops_{self.conv_id}"
         await self.accept()
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.channel_layer.group_add(self.ops_group_name, self.channel_name)
         is_assigned_operator = await self._touch_presence_and_check_assigned()
         if is_assigned_operator:
             branding = await self._build_branding()
@@ -120,6 +164,7 @@ class DashboardChatConsumer(BaseChatConsumer):
 
     async def disconnect(self, close_code):
         if hasattr(self, 'group_name'): await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        if hasattr(self, 'ops_group_name'): await self.channel_layer.group_discard(self.ops_group_name, self.channel_name)
 
     async def receive_json(self, content):
         msg_kind = content.get('type')
@@ -144,7 +189,11 @@ class DashboardChatConsumer(BaseChatConsumer):
     def _save_user_message(self, client_msg_id, msg_text):
         if Message.objects.filter(conversation=self.conversation, client_message_id=client_msg_id).exists(): return None
         touch_presence(self.user)
-        return Message.objects.create(conversation=self.conversation, sender_type=Message.SenderType.USER, sender=self.user, content=msg_text, client_message_id=client_msg_id)
+        msg = Message.objects.create(conversation=self.conversation, sender_type=Message.SenderType.USER, sender=self.user, content=msg_text, client_message_id=client_msg_id)
+        from sla.services import mark_first_response, clear_next_response
+        mark_first_response(self.conversation)
+        clear_next_response(self.conversation)
+        return msg
 
     @database_sync_to_async
     def _mark_read(self):

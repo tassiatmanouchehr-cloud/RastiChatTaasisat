@@ -7,16 +7,39 @@ import {
     sendTypingEvent, sendMarkReadEvent,
     fetchTags, fetchConversationTags, attachConversationTag, detachConversationTag,
     fetchConversationNotes, createConversationNote, fetchCustomerContext,
+    fetchTeams, fetchQueues, claimConversation, transferConversation, escalateConversation, setConversationPriority,
+    fetchAssignmentHistory, createInternalNote, fetchQuickReplies, applyQuickReply,
+    fetchNotifications, fetchUnreadNotificationCount, markNotificationRead, markAllNotificationsRead,
+    connectNotificationsWebSocket,
 } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 interface Visitor { id: string; name: string | null; email: string | null; mobile: string | null; created_at: string; }
 interface LastMessage { content: string; message_type: string; sender_type: string; created_at: string; }
 interface Teammate { id: string; display_name: string; email: string; }
+interface ConversationSLA {
+    first_response_due_at: string | null; next_response_due_at: string | null; resolution_due_at: string | null;
+    first_responded_at: string | null; resolved_at: string | null;
+    first_response_breached_at: string | null; next_response_breached_at: string | null; resolution_breached_at: string | null;
+}
 interface Conversation {
     id: string; status: string; subject: string; category: string; notes: string; rating: number | null;
     created_at: string; updated_at: string; closed_at: string | null; unread_count: number;
     visitor: Visitor | null; last_message: LastMessage | null; assigned_to: Teammate | null;
+    priority: string; queue: string | null; queue_name: string | null; team: string | null; team_name: string | null;
+    sla: ConversationSLA | null;
+}
+interface Team { id: string; name: string; is_active: boolean; }
+interface Queue { id: string; name: string; team: string; is_active: boolean; }
+interface AssignmentHistoryEntry {
+    id: string; action: string; assigned_to_email: string | null; assigned_by_email: string | null;
+    previous_assignee_email: string | null; previous_team_name: string | null; new_team_name: string | null;
+    reason: string; created_at: string;
+}
+interface QuickReply { id: string; scope: string; title: string; body: string; shortcut: string; category: string; usage_count: number; }
+interface AppNotification {
+    id: string; event_type: string; title: string; payload: Record<string, unknown>; read_at: string | null; created_at: string;
 }
 interface Tag { id: string; name: string; color: string; }
 interface Note { id: string; body: string; created_by_email: string | null; created_at: string; }
@@ -61,8 +84,43 @@ const TABS: { key: string; label: string }[] = [
     { key: 'ALL', label: 'همه' }, { key: 'OPEN', label: 'باز' },
     { key: 'PENDING', label: 'در انتظار' }, { key: 'CLOSED', label: 'بسته' },
 ];
-const QUICK_REPLIES = ['سلام وقت بخیر 🌿', 'بله، حتماً بررسی می‌کنم', 'می‌تونم عکس محصول رو بفرستم'];
 const EMOJIS = '😀 😊 😉 😍 🤩 😎 🤔 😴 😢 😅 🙏 💪 👌 ✨ 🔥 ❤️ 💯 🎉 🎁 ⭐'.split(' ');
+
+const PRIORITY_LABEL: Record<string, string> = { LOW: 'کم', NORMAL: 'عادی', HIGH: 'بالا', URGENT: 'فوری' };
+const PRIORITY_COLOR: Record<string, string> = {
+    LOW: 'bg-gray-100 text-gray-500', NORMAL: 'bg-gray-100 text-gray-500',
+    HIGH: 'bg-gold-soft text-terracotta-2', URGENT: 'bg-red-100 text-red-600',
+};
+
+function slaState(sla: ConversationSLA | null): 'none' | 'breached' | 'approaching' | 'ok' {
+    if (!sla) return 'none';
+    if (sla.first_response_breached_at || sla.next_response_breached_at || sla.resolution_breached_at) return 'breached';
+    const dueDates = [
+        !sla.first_responded_at ? sla.first_response_due_at : null,
+        sla.next_response_due_at,
+        !sla.resolved_at ? sla.resolution_due_at : null,
+    ].filter(Boolean) as string[];
+    if (dueDates.length === 0) return 'none';
+    const soonest = dueDates.map(d => new Date(d).getTime()).sort((a, b) => a - b)[0];
+    const minutesLeft = (soonest - Date.now()) / 60000;
+    if (minutesLeft <= 15) return 'approaching';
+    return 'ok';
+}
+
+function slaCountdownLabel(sla: ConversationSLA | null): string | null {
+    if (!sla) return null;
+    const dueDates = [
+        !sla.first_responded_at ? sla.first_response_due_at : null,
+        sla.next_response_due_at,
+        !sla.resolved_at ? sla.resolution_due_at : null,
+    ].filter(Boolean) as string[];
+    if (dueDates.length === 0) return null;
+    const soonest = dueDates.map(d => new Date(d).getTime()).sort((a, b) => a - b)[0];
+    const minutesLeft = Math.round((soonest - Date.now()) / 60000);
+    if (minutesLeft <= 0) return 'گذشته';
+    if (minutesLeft < 60) return `${minutesLeft} دقیقه`;
+    return `${Math.round(minutesLeft / 60)} ساعت`;
+}
 
 function initials(name?: string | null) {
     if (!name) return '؟';
@@ -154,6 +212,13 @@ function MessageBubble({ msg }: { msg: Message }) {
     } else if (msg.message_type === 'RATING') {
         const r = Number(msg.metadata?.rating) || 0;
         body = <div className="rounded-2xl px-4 py-3 bg-gold-soft border border-gold-soft text-terracotta-2 text-xs">مشتری امتیاز داد: {'★'.repeat(r)}{'☆'.repeat(5 - r)}</div>;
+    } else if (msg.message_type === 'INTERNAL_NOTE') {
+        body = (
+            <div className="rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words max-w-md bg-yellow-50 border border-yellow-200 text-yellow-900">
+                <div className="text-[10px] font-bold text-yellow-700 mb-0.5">🔒 یادداشت داخلی</div>
+                {msg.content}
+            </div>
+        );
     } else {
         body = (
             <div className={`rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words max-w-md ${mine ? 'bg-terracotta text-white rounded-tl-md' : 'bg-white border border-gray-200 rounded-tr-md'}`}>
@@ -172,6 +237,11 @@ function MessageBubble({ msg }: { msg: Message }) {
     );
 }
 
+const ASSIGNMENT_ACTION_LABEL: Record<string, string> = {
+    ASSIGN: 'واگذاری', REASSIGN: 'واگذاری مجدد', CLAIM: 'برداشت از صف', TRANSFER: 'انتقال تیم',
+    UNASSIGN: 'لغو واگذاری', RETURN_TO_QUEUE: 'بازگشت به صف', AUTO_ASSIGN: 'واگذاری خودکار', ESCALATE: 'تشدید',
+};
+
 interface CustomerInfoPanelProps {
     selectedConv: Conversation;
     messages: Message[];
@@ -186,11 +256,13 @@ interface CustomerInfoPanelProps {
     setNewNote: (v: string) => void;
     onAddNote: () => void;
     customerContext: CustomerContext | null;
+    assignmentHistory: AssignmentHistoryEntry[];
 }
 
 function CustomerInfoPanel({
     selectedConv, messages, categoryDraft, setCategoryDraft, handleCategoryBlur,
     workspaceTags, conversationTags, onToggleTag, notes, newNote, setNewNote, onAddNote, customerContext,
+    assignmentHistory,
 }: CustomerInfoPanelProps) {
     const attachedIds = new Set(conversationTags.map(t => t.id));
     return (
@@ -242,6 +314,24 @@ function CustomerInfoPanel({
                     </div>
                 </div>
             )}
+
+            <div className="border border-gray-200 rounded-xl p-4">
+                <div className="text-xs font-bold text-gray-500 mb-2">تاریخچه واگذاری</div>
+                <div className="flex flex-col gap-2 max-h-52 overflow-y-auto">
+                    {assignmentHistory.length === 0 && <div className="text-[11px] text-gray-400">تاریخچه‌ای ثبت نشده</div>}
+                    {assignmentHistory.map(entry => (
+                        <div key={entry.id} className="text-[11px] bg-gray-50 rounded-lg p-2">
+                            <div className="font-semibold">{ASSIGNMENT_ACTION_LABEL[entry.action] || entry.action}</div>
+                            {entry.assigned_to_email && <div className="text-gray-500">به: {entry.assigned_to_email}</div>}
+                            {entry.previous_team_name && entry.new_team_name && (
+                                <div className="text-gray-500">تیم: {entry.previous_team_name} ← {entry.new_team_name}</div>
+                            )}
+                            {entry.reason && <div className="text-gray-400 mt-0.5">{entry.reason}</div>}
+                            <div className="text-[10px] text-gray-400 mt-1">{new Date(entry.created_at).toLocaleString('fa-IR')}</div>
+                        </div>
+                    ))}
+                </div>
+            </div>
 
             <div className="border border-gray-200 rounded-xl p-4">
                 <div className="text-xs font-bold text-gray-500 mb-2">دسته‌بندی</div>
@@ -310,6 +400,31 @@ export default function DashboardPage() {
     const [newNote, setNewNote] = useState('');
     const [customerContext, setCustomerContext] = useState<CustomerContext | null>(null);
     const [teammates, setTeammates] = useState<Teammate[]>([]);
+    const [assignmentHistory, setAssignmentHistory] = useState<AssignmentHistoryEntry[]>([]);
+
+    const [teams, setTeams] = useState<Team[]>([]);
+    const [queues, setQueues] = useState<Queue[]>([]);
+    const [queueFilter, setQueueFilter] = useState('');
+    const [teamFilter, setTeamFilter] = useState('');
+    const [priorityFilter, setPriorityFilter] = useState('');
+    const [slaFilter, setSlaFilter] = useState('');
+    const [unassignedOnly, setUnassignedOnly] = useState(false);
+    const [mineOnly, setMineOnly] = useState(false);
+    const [showFilters, setShowFilters] = useState(false);
+    const [showTransferPicker, setShowTransferPicker] = useState(false);
+
+    const [noteMode, setNoteMode] = useState(false);
+    const [showMentionPicker, setShowMentionPicker] = useState(false);
+    const [pendingMentions, setPendingMentions] = useState<Teammate[]>([]);
+
+    const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+    const [showQuickReplies, setShowQuickReplies] = useState(false);
+    const [quickReplySearch, setQuickReplySearch] = useState('');
+
+    const [notifications, setNotifications] = useState<AppNotification[]>([]);
+    const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+    const [showNotifications, setShowNotifications] = useState(false);
+    const notifWsRef = useRef<WebSocket | null>(null);
 
     const wsRef = useRef<WebSocket | null>(null);
     const renderedIds = useRef<Set<string>>(new Set());
@@ -329,6 +444,19 @@ export default function DashboardPage() {
         fetchConversations().then(setConversations).catch(() => setError('Failed to load conversations'));
         fetchProducts().then(setProducts).catch(() => {});
         fetchTags().then(setWorkspaceTags).catch(() => {});
+        fetchTeams().then(setTeams).catch(() => {});
+        fetchQueues().then(setQueues).catch(() => {});
+        fetchQuickReplies().then(setQuickReplies).catch(() => {});
+        fetchNotifications().then(setNotifications).catch(() => {});
+        fetchUnreadNotificationCount().then(d => setUnreadNotifCount(d.count)).catch(() => {});
+
+        notifWsRef.current = connectNotificationsWebSocket<{ type: string; notification?: AppNotification }>((data) => {
+            if (data.type === 'notification.created' && data.notification) {
+                setNotifications(prev => [data.notification as AppNotification, ...prev]);
+                setUnreadNotifCount(prev => prev + 1);
+            }
+        });
+        return () => { notifWsRef.current?.close(); };
     }, []);
 
     useEffect(() => { messagesEndRef.current?.scrollIntoView({ block: 'end' }); }, [messages, visitorTyping]);
@@ -386,6 +514,8 @@ export default function DashboardPage() {
         setMobileView('chat');
         setShowMobileInfo(false);
         setShowEmoji(false); setShowProducts(false); setVisitorTyping(false);
+        setNoteMode(false); setShowMentionPicker(false); setPendingMentions([]);
+        setShowQuickReplies(false); setShowTransferPicker(false);
         renderedIds.current = new Set();
         try {
             const msgs: Message[] = await fetchMessages(conv.id);
@@ -401,6 +531,7 @@ export default function DashboardPage() {
         fetchConversationNotes(conv.id).then(setNotes).catch(() => setNotes([]));
         fetchCustomerContext(conv.id).then(setCustomerContext).catch(() => setCustomerContext(null));
         fetchTeammates(conv.id).then(setTeammates).catch(() => setTeammates([]));
+        fetchAssignmentHistory(conv.id).then(setAssignmentHistory).catch(() => setAssignmentHistory([]));
         setConversations(prev => prev.map(c => c.id === conv.id ? { ...c, unread_count: 0 } : c));
     };
 
@@ -423,6 +554,80 @@ export default function DashboardPage() {
         } catch {
             notify('error', 'ارسال پیام ناموفق بود');
         }
+    };
+
+    const handleSendNote = async () => {
+        const content = input.trim();
+        if (!selectedConv || !content) return;
+        const clientId = genClientId();
+        setInput('');
+        const mentionIds = pendingMentions.map(m => m.id);
+        setPendingMentions([]);
+        try {
+            const note = await createInternalNote(selectedConv.id, content, clientId, mentionIds);
+            setMessages(prev => [...prev, { ...note, id: note.id || clientId } as Message]);
+        } catch {
+            notify('error', 'ثبت یادداشت داخلی ناموفق بود');
+        }
+    };
+
+    const handleSendComposer = () => {
+        if (noteMode) handleSendNote(); else handleSend();
+    };
+
+    const toggleMention = (teammate: Teammate) => {
+        setPendingMentions(prev => prev.some(m => m.id === teammate.id)
+            ? prev.filter(m => m.id !== teammate.id)
+            : [...prev, teammate]);
+    };
+
+    const handleClaim = async () => {
+        if (!selectedConv) return;
+        try {
+            const updated = await claimConversation(selectedConv.id);
+            setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
+            setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+        } catch (e) { notify('error', e instanceof Error ? e.message : 'برداشت گفتگو ناموفق بود'); }
+    };
+
+    const handleTransfer = async (teamId: string) => {
+        if (!selectedConv) return;
+        try {
+            const updated = await transferConversation(selectedConv.id, teamId);
+            setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
+            setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+            setShowTransferPicker(false);
+        } catch { notify('error', 'انتقال گفتگو ناموفق بود'); }
+    };
+
+    const handleEscalate = async () => {
+        if (!selectedConv) return;
+        try {
+            const updated = await escalateConversation(selectedConv.id);
+            setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
+            setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+            notify('success', 'گفتگو تشدید شد');
+        } catch { notify('error', 'تشدید گفتگو ناموفق بود'); }
+    };
+
+    const handleSetPriority = async (priority: string) => {
+        if (!selectedConv) return;
+        try {
+            const updated = await setConversationPriority(selectedConv.id, priority);
+            setSelectedConv(prev => prev ? { ...prev, ...updated } : prev);
+            setConversations(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+        } catch { notify('error', 'تغییر اولویت ناموفق بود'); }
+    };
+
+    const handleUseQuickReply = async (reply: QuickReply) => {
+        try {
+            const res = await applyQuickReply(reply.id, selectedConv?.id);
+            setInput(prev => (prev ? prev + ' ' : '') + res.body);
+            setQuickReplies(prev => prev.map(q => q.id === reply.id ? { ...q, usage_count: res.usage_count } : q));
+        } catch {
+            setInput(prev => (prev ? prev + ' ' : '') + reply.body);
+        }
+        setShowQuickReplies(false);
     };
 
     const handleInputChange = (v: string) => {
@@ -573,10 +778,36 @@ export default function DashboardPage() {
         } catch { notify('error', 'ثبت یادداشت ناموفق بود'); }
     };
 
+    const handleMarkNotificationRead = async (id: string) => {
+        try {
+            await markNotificationRead(id);
+            setNotifications(prev => prev.map(n => n.id === id ? { ...n, read_at: new Date().toISOString() } : n));
+            setUnreadNotifCount(prev => Math.max(0, prev - 1));
+        } catch { /* non-critical */ }
+    };
+
+    const handleMarkAllNotificationsRead = async () => {
+        try {
+            await markAllNotificationsRead();
+            setNotifications(prev => prev.map(n => ({ ...n, read_at: n.read_at || new Date().toISOString() })));
+            setUnreadNotifCount(0);
+        } catch { /* non-critical */ }
+    };
+
     if (error) return <div className="p-4 text-red-500" dir="rtl">{error}</div>;
+
+    const currentUserId = (() => {
+        try { return JSON.parse(localStorage.getItem('user') || '{}').id as string | undefined; } catch { return undefined; }
+    })();
 
     const filtered = conversations.filter(c => {
         if (tab !== 'ALL' && c.status !== tab) return false;
+        if (queueFilter && c.queue !== queueFilter) return false;
+        if (teamFilter && c.team !== teamFilter) return false;
+        if (priorityFilter && c.priority !== priorityFilter) return false;
+        if (unassignedOnly && c.assigned_to) return false;
+        if (mineOnly && c.assigned_to?.id !== currentUserId) return false;
+        if (slaFilter && slaState(c.sla) !== slaFilter) return false;
         if (!search.trim()) return true;
         const q = search.trim();
         return (c.visitor?.name || '').includes(q) || (c.subject || '').includes(q) || (c.last_message?.content || '').includes(q);
@@ -588,18 +819,75 @@ export default function DashboardPage() {
             <div className={`w-full md:w-[320px] bg-white border-l border-gray-200 flex-col ${mobileView === 'chat' ? 'hidden md:flex' : 'flex'}`}>
                 <div className="p-4 border-b border-gray-200 font-bold flex items-center justify-between">
                     <span>گفتگوهای مشتریان</span>
-                    <button onClick={handleLogout} className="text-xs text-gray-400 hover:text-red-500">خروج</button>
+                    <div className="flex items-center gap-2">
+                        <div className="relative">
+                            <button onClick={() => setShowNotifications(v => !v)} className="relative w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-600" title="اعلان‌ها">
+                                🔔
+                                {unreadNotifCount > 0 && <span className="absolute -top-1 -left-1 bg-terracotta text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">{unreadNotifCount}</span>}
+                            </button>
+                            {showNotifications && (
+                                <div className="absolute left-0 top-9 bg-white border border-gray-200 rounded-xl shadow-lg w-72 max-h-80 overflow-y-auto z-20 font-normal">
+                                    <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100">
+                                        <span className="text-xs font-bold text-gray-600">اعلان‌ها</span>
+                                        <button onClick={handleMarkAllNotificationsRead} className="text-[11px] text-terracotta hover:underline">علامت‌گذاری همه</button>
+                                    </div>
+                                    {notifications.length === 0 && <div className="p-4 text-center text-xs text-gray-400">اعلانی وجود ندارد</div>}
+                                    {notifications.map(n => (
+                                        <div key={n.id} onClick={() => !n.read_at && handleMarkNotificationRead(n.id)}
+                                             className={`px-3 py-2.5 border-b border-gray-50 text-xs cursor-pointer ${n.read_at ? '' : 'bg-terracotta-tint/40'}`}>
+                                            <div className="font-medium">{n.title}</div>
+                                            <div className="text-[10px] text-gray-400 mt-0.5">{new Date(n.created_at).toLocaleString('fa-IR')}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        <Link href="/supervisor" className="text-xs text-gray-400 hover:text-terracotta" title="داشبورد سرپرستی">📊</Link>
+                        <button onClick={handleLogout} className="text-xs text-gray-400 hover:text-red-500">خروج</button>
+                    </div>
                 </div>
-                <div className="p-3 border-b border-gray-100">
-                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="جستجوی مشتری یا گفتگو…" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-terracotta" />
+                <div className="p-3 border-b border-gray-100 flex gap-2">
+                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="جستجوی مشتری یا گفتگو…" className="flex-1 min-w-0 text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-terracotta" />
+                    <button onClick={() => setShowFilters(v => !v)} className={`text-xs font-semibold px-2.5 rounded-lg border flex-none ${showFilters ? 'bg-terracotta text-white border-terracotta' : 'border-gray-200 text-gray-500'}`} title="فیلترها">⚙️</button>
                 </div>
+                {showFilters && (
+                    <div className="p-3 border-b border-gray-100 grid grid-cols-2 gap-2 text-xs">
+                        <select value={queueFilter} onChange={e => setQueueFilter(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5">
+                            <option value="">همه صف‌ها</option>
+                            {queues.map(q => <option key={q.id} value={q.id}>{q.name}</option>)}
+                        </select>
+                        <select value={teamFilter} onChange={e => setTeamFilter(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5">
+                            <option value="">همه تیم‌ها</option>
+                            {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                        <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5">
+                            <option value="">همه اولویت‌ها</option>
+                            {Object.entries(PRIORITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                        </select>
+                        <select value={slaFilter} onChange={e => setSlaFilter(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5">
+                            <option value="">وضعیت SLA</option>
+                            <option value="approaching">نزدیک به موعد</option>
+                            <option value="breached">نقض‌شده</option>
+                        </select>
+                        <label className="flex items-center gap-1.5 col-span-1">
+                            <input type="checkbox" checked={unassignedOnly} onChange={e => setUnassignedOnly(e.target.checked)} />
+                            واگذارنشده
+                        </label>
+                        <label className="flex items-center gap-1.5 col-span-1">
+                            <input type="checkbox" checked={mineOnly} onChange={e => setMineOnly(e.target.checked)} />
+                            واگذارشده به من
+                        </label>
+                    </div>
+                )}
                 <div className="flex gap-1 px-3 py-2 border-b border-gray-100 overflow-x-auto">
                     {TABS.map(t => (
                         <button key={t.key} onClick={() => setTab(t.key)} className={`text-xs font-semibold px-2.5 py-1.5 rounded-lg whitespace-nowrap ${tab === t.key ? 'bg-terracotta text-white' : 'text-gray-500 hover:bg-gray-100'}`}>{t.label}</button>
                     ))}
                 </div>
                 <div className="flex-1 overflow-y-auto">
-                    {filtered.map(conv => (
+                    {filtered.map(conv => {
+                        const sla = slaState(conv.sla);
+                        return (
                         <div key={conv.id} onClick={() => handleSelectConv(conv)}
                              className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 flex gap-2.5 ${selectedConv?.id === conv.id ? 'bg-terracotta-tint' : ''}`}>
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(conv.visitor?.name)}</div>
@@ -612,13 +900,20 @@ export default function DashboardPage() {
                                     <span className="text-xs text-gray-500 truncate">{previewFor(conv.last_message)}</span>
                                     {conv.unread_count > 0 && <span className="bg-terracotta text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 flex-none">{conv.unread_count}</span>}
                                 </div>
-                                <div className="mt-1 flex gap-1">
+                                <div className="mt-1 flex gap-1 flex-wrap">
                                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{STATUS_LABEL[conv.status] || conv.status}</span>
+                                    {conv.priority && conv.priority !== 'NORMAL' && (
+                                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${PRIORITY_COLOR[conv.priority]}`}>{PRIORITY_LABEL[conv.priority]}</span>
+                                    )}
+                                    {!conv.assigned_to && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">واگذارنشده</span>}
+                                    {sla === 'breached' && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-600">⏰ نقض SLA</span>}
+                                    {sla === 'approaching' && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gold-soft text-terracotta-2">⏳ {slaCountdownLabel(conv.sla)}</span>}
                                     {conv.category && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gold-soft text-terracotta-2 border border-gold-soft truncate">{conv.category}</span>}
                                 </div>
                             </div>
                         </div>
-                    ))}
+                        );
+                    })}
                     {filtered.length === 0 && <div className="p-6 text-center text-sm text-gray-400">گفتگویی یافت نشد</div>}
                 </div>
             </div>
@@ -627,19 +922,36 @@ export default function DashboardPage() {
             <div className={`flex-1 flex-col ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
                 {selectedConv ? (
                     <>
-                        <div className="p-3 bg-white border-b border-gray-200 flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                                <button onClick={() => setMobileView('list')} className="md:hidden text-gray-500 px-1">›</button>
-                                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(selectedConv.visitor?.name)}</div>
-                                <div className="min-w-0">
-                                    <div className="font-bold text-sm truncate">{selectedConv.visitor?.name || 'مهمان'}</div>
-                                    <div className="text-[11px] text-gray-500">
-                                        {STATUS_LABEL[selectedConv.status] || selectedConv.status}
-                                        {selectedConv.rating && <span className="text-gold"> • امتیاز {selectedConv.rating}★</span>}
+                        <div className="p-3 bg-white border-b border-gray-200 flex flex-col gap-2">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                    <button onClick={() => setMobileView('list')} className="md:hidden text-gray-500 px-1">›</button>
+                                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-gold to-terracotta-2 text-white flex items-center justify-center font-bold text-sm flex-none">{initials(selectedConv.visitor?.name)}</div>
+                                    <div className="min-w-0">
+                                        <div className="font-bold text-sm truncate">{selectedConv.visitor?.name || 'مهمان'}</div>
+                                        <div className="text-[11px] text-gray-500 flex items-center gap-1 flex-wrap">
+                                            <span>{STATUS_LABEL[selectedConv.status] || selectedConv.status}</span>
+                                            {selectedConv.rating && <span className="text-gold">• امتیاز {selectedConv.rating}★</span>}
+                                            {selectedConv.team_name && <span>• تیم {selectedConv.team_name}</span>}
+                                            {slaState(selectedConv.sla) === 'breached' && <span className="text-red-600 font-semibold">• نقض SLA</span>}
+                                            {slaState(selectedConv.sla) === 'approaching' && <span className="text-terracotta-2 font-semibold">• {slaCountdownLabel(selectedConv.sla)} تا موعد</span>}
+                                        </div>
                                     </div>
                                 </div>
+                                <button onClick={() => setShowMobileInfo(true)} className="lg:hidden w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center flex-none" title="اطلاعات مشتری">ⓘ</button>
                             </div>
-                            <div className="flex items-center gap-2 flex-none">
+                            <div className="flex items-center gap-2 flex-wrap justify-end">
+                                <select
+                                    value={selectedConv.priority}
+                                    onChange={(e) => handleSetPriority(e.target.value)}
+                                    className={`text-xs font-semibold px-2 py-1.5 rounded-lg border-none outline-none ${PRIORITY_COLOR[selectedConv.priority] || 'bg-gray-100 text-gray-700'}`}
+                                    title="اولویت"
+                                >
+                                    {Object.entries(PRIORITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                                </select>
+                                {!selectedConv.assigned_to && (
+                                    <button onClick={handleClaim} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-terracotta text-white hover:bg-terracotta-2">برداشتن</button>
+                                )}
                                 <select
                                     value={selectedConv.assigned_to?.id || ''}
                                     onChange={(e) => handleReassign(e.target.value)}
@@ -650,13 +962,24 @@ export default function DashboardPage() {
                                     {teammates.map(t => <option key={t.id} value={t.id}>{t.display_name}</option>)}
                                 </select>
                                 <button onClick={handleAssign} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700">واگذاری به من</button>
+                                <div className="relative">
+                                    <button onClick={() => setShowTransferPicker(v => !v)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700">انتقال تیم</button>
+                                    {showTransferPicker && (
+                                        <div className="absolute left-0 top-9 bg-white border border-gray-200 rounded-xl shadow-lg w-44 z-20 p-1.5">
+                                            {teams.filter(t => t.is_active).map(t => (
+                                                <button key={t.id} onClick={() => handleTransfer(t.id)} className="w-full text-right text-xs px-2 py-1.5 rounded-lg hover:bg-gray-50">{t.name}</button>
+                                            ))}
+                                            {teams.length === 0 && <div className="text-[11px] text-gray-400 p-2">تیمی ثبت نشده</div>}
+                                        </div>
+                                    )}
+                                </div>
+                                <button onClick={handleEscalate} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600" title="تشدید به سرپرست">🚨 تشدید</button>
                                 <button onClick={handleRequestRating} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gold-soft hover:bg-gold-soft/70 text-terracotta-2 border border-gold-soft">⭐ درخواست امتیاز</button>
                                 {selectedConv.status === 'CLOSED' ? (
                                     <button onClick={handleReopen} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-success-soft hover:bg-success-soft/70 text-success">بازگشایی</button>
                                 ) : (
                                     <button onClick={handleClose} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600">پایان گفتگو</button>
                                 )}
-                                <button onClick={() => setShowMobileInfo(true)} className="lg:hidden w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 flex items-center justify-center flex-none" title="اطلاعات مشتری">ⓘ</button>
                             </div>
                         </div>
 
@@ -680,11 +1003,60 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="bg-white border-t border-gray-200 p-3 relative">
-                            <div className="flex gap-1.5 overflow-x-auto pb-2">
-                                {QUICK_REPLIES.map(q => (
-                                    <button key={q} onClick={() => handleSend(q)} className="text-xs whitespace-nowrap px-2.5 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-terracotta hover:text-terracotta">{q}</button>
-                                ))}
+                            <div className="flex items-center gap-2 mb-2">
+                                <button
+                                    onClick={() => setNoteMode(v => !v)}
+                                    className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border ${noteMode ? 'bg-yellow-100 border-yellow-300 text-yellow-800' : 'border-gray-200 text-gray-500 hover:border-terracotta'}`}
+                                >
+                                    {noteMode ? '🔒 حالت یادداشت داخلی (کلیک برای بازگشت به پاسخ)' : '💬 پاسخ به مشتری (کلیک برای یادداشت داخلی)'}
+                                </button>
                             </div>
+
+                            {noteMode && pendingMentions.length > 0 && (
+                                <div className="flex gap-1.5 flex-wrap mb-2">
+                                    {pendingMentions.map(m => (
+                                        <span key={m.id} className="text-[10.5px] font-semibold px-2 py-1 rounded-full bg-terracotta-tint text-terracotta-2 flex items-center gap-1">
+                                            @{m.display_name}
+                                            <button onClick={() => toggleMention(m)} className="opacity-70 hover:opacity-100">✕</button>
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+
+                            <div className="flex gap-1.5 overflow-x-auto pb-2">
+                                {quickReplies.slice(0, 5).map(q => (
+                                    <button key={q.id} onClick={() => handleUseQuickReply(q)} className="text-xs whitespace-nowrap px-2.5 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-terracotta hover:text-terracotta">{q.title}</button>
+                                ))}
+                                <button onClick={() => setShowQuickReplies(v => !v)} className="text-xs whitespace-nowrap px-2.5 py-1.5 rounded-full border border-dashed border-gray-300 text-gray-500 hover:border-terracotta">همه پاسخ‌های آماده…</button>
+                            </div>
+
+                            {showQuickReplies && (
+                                <div className="absolute bottom-24 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-80 max-h-72 overflow-y-auto z-10">
+                                    <input
+                                        value={quickReplySearch} onChange={(e) => setQuickReplySearch(e.target.value)} autoFocus
+                                        placeholder="جستجوی پاسخ آماده…"
+                                        className="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 mb-2 outline-none focus:border-terracotta"
+                                    />
+                                    {quickReplies.filter(q => !quickReplySearch.trim() || q.title.includes(quickReplySearch) || q.body.includes(quickReplySearch)).map(q => (
+                                        <button key={q.id} onClick={() => handleUseQuickReply(q)} className="w-full text-right p-2 rounded-lg hover:bg-gray-50">
+                                            <div className="text-xs font-semibold">{q.title}</div>
+                                            <div className="text-[11px] text-gray-400 truncate">{q.body}</div>
+                                        </button>
+                                    ))}
+                                    {quickReplies.length === 0 && <div className="text-xs text-gray-400 px-1 py-2">پاسخ آماده‌ای ثبت نشده</div>}
+                                </div>
+                            )}
+
+                            {showMentionPicker && (
+                                <div className="absolute bottom-24 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-64 max-h-60 overflow-y-auto z-10">
+                                    <div className="text-xs font-bold text-gray-500 px-1 pb-2">اشاره به همکار</div>
+                                    {teammates.map(t => (
+                                        <button key={t.id} onClick={() => toggleMention(t)} className={`w-full text-right px-2 py-1.5 rounded-lg text-xs hover:bg-gray-50 ${pendingMentions.some(m => m.id === t.id) ? 'bg-terracotta-tint text-terracotta-2' : ''}`}>
+                                            @{t.display_name}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
 
                             {showEmoji && (
                                 <div className="absolute bottom-16 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 grid grid-cols-8 gap-1 w-72 z-10">
@@ -727,21 +1099,27 @@ export default function DashboardPage() {
                                     <span>در حال ارسال…</span>
                                 </div>
                             )}
-                            <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-2 py-1.5 focus-within:border-terracotta">
-                                <button onClick={() => { setShowProducts(v => !v); setShowEmoji(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="معرفی محصول">🛍️</button>
+                            <div className={`flex items-center gap-1.5 border rounded-xl px-2 py-1.5 focus-within:border-terracotta ${noteMode ? 'bg-yellow-50 border-yellow-200' : 'bg-gray-50 border-gray-200'}`}>
+                                {noteMode ? (
+                                    <button onClick={() => { setShowMentionPicker(v => !v); setShowQuickReplies(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="اشاره به همکار">@</button>
+                                ) : (
+                                    <button onClick={() => { setShowProducts(v => !v); setShowEmoji(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="معرفی محصول">🛍️</button>
+                                )}
                                 <button onClick={() => { setShowEmoji(v => !v); setShowProducts(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="ایموجی">🙂</button>
-                                <button onClick={() => fileInputRef.current?.click()} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="پیوست عکس">📎</button>
+                                {!noteMode && <button onClick={() => fileInputRef.current?.click()} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="پیوست عکس">📎</button>}
                                 <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAttach(f); e.target.value = ''; }} />
                                 <input type="text" value={input} onChange={(e) => handleInputChange(e.target.value)}
-                                       onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
-                                       className="flex-1 bg-transparent outline-none text-sm px-1 min-w-0" placeholder="پاسخ به مشتری…" />
-                                {recording && (
+                                       onKeyDown={(e) => { if (e.key === 'Enter') handleSendComposer(); }}
+                                       className="flex-1 bg-transparent outline-none text-sm px-1 min-w-0" placeholder={noteMode ? 'یادداشت داخلی (فقط برای همکاران)…' : 'پاسخ به مشتری…'} />
+                                {!noteMode && recording && (
                                     <button onClick={handleCancelRecording} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white text-red-500" title="لغو ضبط">✕</button>
                                 )}
-                                <button onClick={handleToggleRecording} className={`w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white text-xs font-semibold ${recording ? 'text-red-500 animate-pulse' : ''}`} title="پیام صوتی">
-                                    {recording ? fmtDuration(recordDuration) : '🎤'}
-                                </button>
-                                <button onClick={() => handleSend()} className="w-9 h-9 rounded-lg bg-terracotta text-white flex items-center justify-center flex-none">➤</button>
+                                {!noteMode && (
+                                    <button onClick={handleToggleRecording} className={`w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white text-xs font-semibold ${recording ? 'text-red-500 animate-pulse' : ''}`} title="پیام صوتی">
+                                        {recording ? fmtDuration(recordDuration) : '🎤'}
+                                    </button>
+                                )}
+                                <button onClick={handleSendComposer} className={`w-9 h-9 rounded-lg text-white flex items-center justify-center flex-none ${noteMode ? 'bg-yellow-600' : 'bg-terracotta'}`}>➤</button>
                             </div>
                         </div>
                     </>
@@ -758,7 +1136,7 @@ export default function DashboardPage() {
                         categoryDraft={categoryDraft} setCategoryDraft={setCategoryDraft} handleCategoryBlur={handleCategoryBlur}
                         workspaceTags={workspaceTags} conversationTags={conversationTags} onToggleTag={handleToggleTag}
                         notes={notes} newNote={newNote} setNewNote={setNewNote} onAddNote={handleAddNote}
-                        customerContext={customerContext}
+                        customerContext={customerContext} assignmentHistory={assignmentHistory}
                     />
                 </div>
             )}
@@ -775,7 +1153,7 @@ export default function DashboardPage() {
                         categoryDraft={categoryDraft} setCategoryDraft={setCategoryDraft} handleCategoryBlur={handleCategoryBlur}
                         workspaceTags={workspaceTags} conversationTags={conversationTags} onToggleTag={handleToggleTag}
                         notes={notes} newNote={newNote} setNewNote={setNewNote} onAddNote={handleAddNote}
-                        customerContext={customerContext}
+                        customerContext={customerContext} assignmentHistory={assignmentHistory}
                     />
                 </div>
             )}

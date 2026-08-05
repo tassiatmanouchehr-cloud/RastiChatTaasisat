@@ -5,12 +5,17 @@ from conversations.views import (
     CustomerConversationViewSet, PlatformSupportViewSet, WorkspaceSupportViewSet,
     StartCustomerChatView, MessageListView, SendMessageView,
     WidgetMessageListView, WidgetMarkReadView, WidgetUploadView, WidgetRateConversationView,
-    WidgetBrandingView,
+    WidgetBrandingView, OperationalSummaryView,
 )
 from catalog.views import ProductViewSet
 from customer_context.views import (
     TagViewSet, ConversationTagsView, ConversationNotesView, CustomerContextView,
 )
+from teams.views import TeamViewSet
+from queues.views import QueueViewSet
+from sla.views import BusinessCalendarViewSet, SLAPolicyViewSet, ConversationSLAView
+from collaboration.views import QuickReplyViewSet
+from notifications.views import NotificationViewSet
 
 router = DefaultRouter()
 router.register(r'conversations/customer', CustomerConversationViewSet, basename='customer-conv')
@@ -18,6 +23,12 @@ router.register(r'support', WorkspaceSupportViewSet, basename='ws-support')
 router.register(r'platform/support', PlatformSupportViewSet, basename='pl-support')
 router.register(r'products', ProductViewSet, basename='product')
 router.register(r'tags', TagViewSet, basename='tag')
+router.register(r'teams', TeamViewSet, basename='team')
+router.register(r'queues', QueueViewSet, basename='queue')
+router.register(r'business-calendars', BusinessCalendarViewSet, basename='business-calendar')
+router.register(r'sla-policies', SLAPolicyViewSet, basename='sla-policy')
+router.register(r'quick-replies', QuickReplyViewSet, basename='quick-reply')
+router.register(r'notifications', NotificationViewSet, basename='notification')
 
 urlpatterns = [
     path('auth/', include('accounts.urls')),
@@ -30,6 +41,8 @@ urlpatterns = [
     path('conversations/customer/<uuid:conv_id>/tags/', ConversationTagsView.as_view(), name='conversation-tags'),
     path('conversations/customer/<uuid:conv_id>/notes/', ConversationNotesView.as_view(), name='conversation-notes'),
     path('conversations/customer/<uuid:conv_id>/customer-context/', CustomerContextView.as_view(), name='customer-context'),
+    path('conversations/customer/<uuid:conv_id>/sla/', ConversationSLAView.as_view(), name='conversation-sla'),
+    path('supervisor/summary/', OperationalSummaryView.as_view(), name='supervisor-summary'),
     path('widget/conversations/<uuid:conv_id>/messages/', WidgetMessageListView.as_view(), name='widget-message-list'),
     path('widget/conversations/<uuid:conv_id>/mark_read/', WidgetMarkReadView.as_view(), name='widget-mark-read'),
     path('widget/conversations/<uuid:conv_id>/upload/', WidgetUploadView.as_view(), name='widget-upload'),

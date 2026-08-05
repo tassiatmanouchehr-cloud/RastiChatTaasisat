@@ -18,3 +18,17 @@ class LoginSerializer(serializers.Serializer):
 
 class PresenceSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=OperatorPresence.Status.choices)
+    max_capacity = serializers.IntegerField(required=False, min_value=1, max_value=100)
+
+
+class PresenceDetailSerializer(serializers.Serializer):
+    """Fuller presence snapshot for the supervisor dashboard / inbox filters
+    (unlike PresenceSerializer, which is only the request/response shape for
+    the operator's own explicit status change).
+    """
+    status = serializers.CharField(source='effective_status')
+    max_capacity = serializers.IntegerField()
+    active_conversation_count = serializers.SerializerMethodField()
+
+    def get_active_conversation_count(self, obj):
+        return obj.active_conversation_count()
