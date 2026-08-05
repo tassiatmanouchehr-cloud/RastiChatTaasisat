@@ -174,7 +174,10 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def escalate(self, request, pk=None):
         conv = self.get_object()
-        conv = conv_services.escalate(conv, request.user, reason=request.data.get('reason', ''))
+        try:
+            conv = conv_services.escalate(conv, request.user, reason=request.data.get('reason', ''))
+        except conv_services.ConversationServiceError as exc:
+            return _service_error_response(exc)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])

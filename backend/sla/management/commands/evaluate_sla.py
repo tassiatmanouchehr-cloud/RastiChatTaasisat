@@ -140,10 +140,20 @@ class Command(BaseCommand):
                 user, conv.workspace, Notification.EventType.SLA_BREACHED,
                 f'SLA {clock_name} برای این گفتگو نقض شد', {'conversation_id': str(conv.id), 'clock': clock_name},
             )
+        escalated = False
         if escalate_on_breach:
-            from conversations.services import escalate as escalate_conversation
-            escalate_conversation(conv, actor=None, reason=f'SLA {clock_name} breach')
-        elif conv.priority in (Conversation.Priority.LOW, Conversation.Priority.NORMAL):
+            from conversations.services import ConversationServiceError, escalate as escalate_conversation
+            try:
+                escalate_conversation(conv, actor=None, reason=f'SLA {clock_name} breach')
+                escalated = True
+            except ConversationServiceError:
+                # No eligible (under-capacity) supervisor to escalate to —
+                # one conversation's rejected escalation must never abort
+                # the whole evaluator run; fall through to the same
+                # priority-bump every other breach without an escalation
+                # target already gets, below.
+                pass
+        if not escalated and conv.priority in (Conversation.Priority.LOW, Conversation.Priority.NORMAL):
             from conversations.services import set_priority
             from conversations.models import PriorityChange
             set_priority(
