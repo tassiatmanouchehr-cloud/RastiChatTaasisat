@@ -1,16 +1,45 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models
 from django.db.models import F
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from common.pagination import StandardPagination
-from common.permissions import IsWorkspaceOperator
+from common.permissions import IsWorkspaceOperator, user_has_workspace_role
 from common.tenancy import resolve_operator_workspace
 from teams.models import Team, TeamMembership
 from .models import QuickReply
 from .serializers import QuickReplySerializer
+
+
+class IsQuickReplyManager(permissions.BasePermission):
+    """Object-level write authorization for an *existing* quick reply,
+    independent of who can merely see it (see QuickReplyViewSet.get_queryset
+    — visibility does not imply write permission). PERSONAL: only its owner.
+    TEAM: a SUPERVISOR of that team, that team's manager, or a workspace
+    admin — never just any team member, even though any active member may
+    create one. WORKSPACE: only a workspace admin, matching the same
+    requirement already enforced at creation time.
+    """
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if obj.scope == QuickReply.Scope.PERSONAL:
+            return obj.owner_id == user.id
+        if obj.scope == QuickReply.Scope.WORKSPACE:
+            return user_has_workspace_role(user, obj.workspace_id, ['WORKSPACE_OWNER', 'WORKSPACE_ADMIN'])
+        if obj.scope == QuickReply.Scope.TEAM:
+            if user_has_workspace_role(user, obj.workspace_id, ['WORKSPACE_OWNER', 'WORKSPACE_ADMIN']):
+                return True
+            if obj.team_id and obj.team.manager_id == user.id:
+                return True
+            return TeamMembership.objects.filter(
+                team_id=obj.team_id, user=user, role=TeamMembership.Role.SUPERVISOR, is_active=True,
+            ).exists()
+        return False
 
 
 class QuickReplyViewSet(viewsets.ModelViewSet):
@@ -25,6 +54,11 @@ class QuickReplyViewSet(viewsets.ModelViewSet):
     serializer_class = QuickReplySerializer
     permission_classes = [IsWorkspaceOperator]
     pagination_class = StandardPagination
+
+    def get_permissions(self):
+        if self.action in ('update', 'partial_update', 'destroy'):
+            return [IsWorkspaceOperator(), IsQuickReplyManager()]
+        return [IsWorkspaceOperator()]
 
     def get_queryset(self):
         user = self.request.user

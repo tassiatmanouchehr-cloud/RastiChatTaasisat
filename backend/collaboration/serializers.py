@@ -46,3 +46,16 @@ class QuickReplySerializer(serializers.ModelSerializer):
             'is_active', 'usage_count', 'created_by', 'created_by_email', 'updated_by', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'workspace', 'usage_count', 'created_by', 'updated_by', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        # scope/owner/team define WHO is authorized to manage this reply —
+        # letting them change post-creation would let an update silently
+        # re-target a reply's authorization without the create-time checks
+        # (e.g. PATCHing a personal reply's scope to WORKSPACE) ever running
+        # against the new target. They're fixed for the reply's lifetime;
+        # scope changes require deleting and recreating.
+        if self.instance:
+            for immutable_field in ('scope', 'owner', 'team'):
+                if immutable_field in attrs and attrs[immutable_field] != getattr(self.instance, immutable_field):
+                    raise serializers.ValidationError({immutable_field: 'Cannot be changed after creation.'})
+        return attrs
