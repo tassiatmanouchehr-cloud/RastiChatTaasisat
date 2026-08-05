@@ -140,10 +140,20 @@ class Command(BaseCommand):
                 user, conv.workspace, Notification.EventType.SLA_BREACHED,
                 f'SLA {clock_name} برای این گفتگو نقض شد', {'conversation_id': str(conv.id), 'clock': clock_name},
             )
+        escalated = False
         if escalate_on_breach:
-            from conversations.services import escalate as escalate_conversation
-            escalate_conversation(conv, actor=None, reason=f'SLA {clock_name} breach')
-        elif conv.priority in (Conversation.Priority.LOW, Conversation.Priority.NORMAL):
+            from conversations.services import ConversationServiceError, escalate as escalate_conversation
+            try:
+                escalate_conversation(conv, actor=None, reason=f'SLA {clock_name} breach')
+                escalated = True
+            except ConversationServiceError:
+                # No eligible (under-capacity) supervisor to escalate to —
+                # one conversation's rejected escalation must never abort
+                # the whole evaluator run; fall through to the same
+                # priority-bump every other breach without an escalation
+                # target already gets, below.
+                pass
+        if not escalated and conv.priority in (Conversation.Priority.LOW, Conversation.Priority.NORMAL):
             from conversations.services import set_priority
             from conversations.models import PriorityChange
             set_priority(
@@ -151,6 +161,8 @@ class Command(BaseCommand):
                 reason=f'SLA {clock_name} breach', reason_code=PriorityChange.Reason.SLA_BREACH,
             )
         self._broadcast(conv.id, 'conversation.sla_breached', {'conversation_id': str(conv.id), 'clock': clock_name})
+        from automations.events import publish_event
+        publish_event('SLA_BREACHED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM', payload={'clock': clock_name})
 
     def _on_approaching(self, conv, clock_name, due_at):
         AuditEvent.objects.create(
@@ -163,6 +175,8 @@ class Command(BaseCommand):
                 f'SLA {clock_name} برای این گفتگو در حال نزدیک شدن است', {'conversation_id': str(conv.id), 'clock': clock_name},
             )
         self._broadcast(conv.id, 'conversation.sla_approaching', {'conversation_id': str(conv.id), 'clock': clock_name})
+        from automations.events import publish_event
+        publish_event('SLA_APPROACHING', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM', payload={'clock': clock_name})
 
     @staticmethod
     def _broadcast(conv_id, event_type, data):

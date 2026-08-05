@@ -121,6 +121,11 @@ class WidgetChatConsumer(BaseChatConsumer):
         msg = Message.objects.create(conversation=self.conversation, sender_type=Message.SenderType.VISITOR, sender_visitor=self.conversation.visitor, content=msg_text, client_message_id=client_msg_id)
         from sla.services import recalculate_next_response
         recalculate_next_response(self.conversation)
+        from automations.events import publish_event
+        publish_event(
+            'CUSTOMER_MESSAGE_CREATED', self.conversation.workspace_id, conversation_id=self.conversation.id,
+            actor_type='VISITOR', payload={'content': msg.content, 'message_type': msg.message_type, 'sender_type': 'VISITOR'},
+        )
         return msg
 
     @database_sync_to_async
@@ -193,6 +198,11 @@ class DashboardChatConsumer(OpsEventsMixin, BaseChatConsumer):
         from sla.services import mark_first_response, clear_next_response
         mark_first_response(self.conversation)
         clear_next_response(self.conversation)
+        from automations.events import publish_event
+        publish_event(
+            'OPERATOR_MESSAGE_CREATED', self.conversation.workspace_id, conversation_id=self.conversation.id,
+            actor_id=self.user.id, actor_type='USER', payload={'content': msg.content, 'message_type': msg.message_type, 'sender_type': 'USER'},
+        )
         return msg
 
     @database_sync_to_async

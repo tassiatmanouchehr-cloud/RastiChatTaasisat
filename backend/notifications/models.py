@@ -13,6 +13,7 @@ class Notification(models.Model):
         SLA_APPROACHING = 'SLA_APPROACHING', 'SLA approaching'
         SLA_BREACHED = 'SLA_BREACHED', 'SLA breached'
         ESCALATION_RECEIVED = 'ESCALATION_RECEIVED', 'Escalation received'
+        AUTOMATION_TRIGGERED = 'AUTOMATION_TRIGGERED', 'Automation notification'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     recipient = models.ForeignKey(

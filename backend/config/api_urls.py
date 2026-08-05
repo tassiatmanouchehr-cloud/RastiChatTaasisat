@@ -16,6 +16,10 @@ from queues.views import QueueViewSet
 from sla.views import BusinessCalendarViewSet, SLAPolicyViewSet, ConversationSLAView
 from collaboration.views import QuickReplyViewSet
 from notifications.views import NotificationViewSet
+from automations.views import (
+    AutomationRuleViewSet, RuleValidationView, RuleSimulationView, AutomationRegistryView,
+    AutomationExecutionListView, ScheduledActionListView, ScheduledActionCancelView,
+)
 
 router = DefaultRouter()
 router.register(r'conversations/customer', CustomerConversationViewSet, basename='customer-conv')
@@ -29,6 +33,7 @@ router.register(r'business-calendars', BusinessCalendarViewSet, basename='busine
 router.register(r'sla-policies', SLAPolicyViewSet, basename='sla-policy')
 router.register(r'quick-replies', QuickReplyViewSet, basename='quick-reply')
 router.register(r'notifications', NotificationViewSet, basename='notification')
+router.register(r'automations/rules', AutomationRuleViewSet, basename='automation-rule')
 
 urlpatterns = [
     path('auth/', include('accounts.urls')),
@@ -48,4 +53,10 @@ urlpatterns = [
     path('widget/conversations/<uuid:conv_id>/upload/', WidgetUploadView.as_view(), name='widget-upload'),
     path('widget/conversations/<uuid:conv_id>/rate/', WidgetRateConversationView.as_view(), name='widget-rate'),
     path('widget/conversations/<uuid:conv_id>/branding/', WidgetBrandingView.as_view(), name='widget-branding'),
+    path('automations/registry/', AutomationRegistryView.as_view(), name='automation-registry'),
+    path('automations/validate/', RuleValidationView.as_view(), name='automation-validate'),
+    path('automations/simulate/', RuleSimulationView.as_view(), name='automation-simulate'),
+    path('automations/execution-history/', AutomationExecutionListView.as_view(), name='automation-execution-history'),
+    path('automations/scheduled-actions/', ScheduledActionListView.as_view(), name='automation-scheduled-actions'),
+    path('automations/scheduled-actions/<uuid:pk>/cancel/', ScheduledActionCancelView.as_view(), name='automation-scheduled-action-cancel'),
 ]

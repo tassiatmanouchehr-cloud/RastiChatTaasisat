@@ -174,7 +174,10 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def escalate(self, request, pk=None):
         conv = self.get_object()
-        conv = conv_services.escalate(conv, request.user, reason=request.data.get('reason', ''))
+        try:
+            conv = conv_services.escalate(conv, request.user, reason=request.data.get('reason', ''))
+        except conv_services.ConversationServiceError as exc:
+            return _service_error_response(exc)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
@@ -238,28 +241,26 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
         )
         data = InternalNoteSerializer(note, context={'request': request}).data
         conv_services.broadcast_ops_event(conv.id, 'conversation.internal_note_created', {'note': data})
+        from automations.events import publish_event
+        publish_event(
+            'INTERNAL_NOTE_CREATED', conv.workspace_id, conversation_id=conv.id,
+            actor_id=request.user.id, actor_type='USER', payload={'content': body},
+        )
         return Response(data, status=201)
 
     @action(detail=True, methods=['post'])
     def close(self, request, pk=None):
-        from sla.services import mark_resolved
         conv = self.get_object()
-        conv.status = Conversation.Status.CLOSED
-        conv.closed_at = timezone.now()
-        conv.save()
-        mark_resolved(conv)
+        conv = conv_services.close_conversation(conv, actor=request.user)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['post'])
     def reopen(self, request, pk=None):
-        from sla.services import mark_reopened
         conv = self.get_object()
-        if conv.status != Conversation.Status.CLOSED:
-            return Response({'error': 'Conversation is not closed'}, status=status.HTTP_400_BAD_REQUEST)
-        conv.status = Conversation.Status.OPEN
-        conv.closed_at = None
-        conv.save()
-        mark_reopened(conv)
+        try:
+            conv = conv_services.reopen_conversation(conv, actor=request.user)
+        except conv_services.ConversationServiceError as exc:
+            return Response({'error': exc.message}, status=exc.status_code)
         return Response(ConversationSerializer(conv, context={'request': request}).data)
 
     @action(detail=True, methods=['get'])
@@ -356,17 +357,32 @@ class StartCustomerChatView(APIView):
     permission_classes = []
     def post(self, request):
         from django.core.exceptions import ValidationError
+        from django.db import transaction
         try:
             session = VisitorSession.objects.get(token=request.data.get('session_token'))
         except (VisitorSession.DoesNotExist, ValidationError):
             return Response({'error': 'Invalid session'}, status=status.HTTP_401_UNAUTHORIZED)
-        conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
-        if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
+        with transaction.atomic():
+            conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
+            if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
+            if created:
+                from queues.services import route_new_conversation
+                from sla.services import apply_sla
+                from automations.events import publish_event
+                # Routing/SLA must be persisted BEFORE CONVERSATION_CREATED is
+                # published — an automation condition on conversation.queue_id,
+                # operational.queue_has_capacity, or conversation.sla_state must
+                # see the conversation's real, final creation-time state, not an
+                # unrouted, SLA-less intermediate one. publish_event() itself only
+                # schedules delivery via transaction.on_commit(), so wrapping the
+                # whole sequence in one atomic block also means a failure here
+                # (e.g. routing/SLA raising) rolls back the conversation creation
+                # too, rather than leaving a misleading published event with no
+                # backing conversation state.
+                conv = route_new_conversation(conv)
+                apply_sla(conv)
+                publish_event('CONVERSATION_CREATED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM')
         if created:
-            from queues.services import route_new_conversation
-            from sla.services import apply_sla
-            conv = route_new_conversation(conv)
-            apply_sla(conv)
             conv_services.broadcast_ops_event(conv.id, 'conversation.queued', conv_services.conversation_summary(conv))
         data = ConversationSerializer(conv).data
         data['branding'] = build_widget_branding(conv)
@@ -400,6 +416,11 @@ class SendMessageView(APIView):
         from sla.services import mark_first_response, clear_next_response
         mark_first_response(conv)
         clear_next_response(conv)
+        from automations.events import publish_event
+        publish_event(
+            'OPERATOR_MESSAGE_CREATED', conv.workspace_id, conversation_id=conv.id,
+            actor_id=request.user.id, actor_type='USER', payload={'content': msg.content, 'message_type': msg.message_type, 'sender_type': 'USER'},
+        )
         data = MessageSerializer(msg, context={'request': request}).data
         _broadcast(conv_id, data)
         return Response(data, status=201)
@@ -518,6 +539,8 @@ class WidgetRateConversationView(APIView):
         _broadcast(conv.id, MessageSerializer(msg, context={'request': request}).data)
         conv.rating = rating
         conv.save(update_fields=['rating'])
+        from automations.events import publish_event
+        publish_event('RATING_SUBMITTED', conv.workspace_id, conversation_id=conv.id, actor_type='VISITOR', payload={'rating': rating})
         return Response(ConversationSerializer(conv).data, status=200)
 
 # --- PLATFORM SUPPORT VIEWS ---

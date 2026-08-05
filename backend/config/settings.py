@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'sla',
     'collaboration',
     'notifications',
+    'automations',
 ]
 
 MIDDLEWARE = [
