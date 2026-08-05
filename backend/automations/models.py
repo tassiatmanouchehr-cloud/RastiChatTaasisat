@@ -60,7 +60,11 @@ class AutomationRule(models.Model):
     valid_until = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ['priority', 'created_at']
+        # `id` is a final, stable tie-breaker for rules sharing the same
+        # priority and created_at (e.g. bulk-seeded fixtures with identical
+        # timestamps) — without it, ordering among ties is undefined
+        # (physical row order), not deterministic.
+        ordering = ['priority', 'created_at', 'id']
         indexes = [
             models.Index(fields=['workspace', 'trigger_type', 'is_active', 'priority'], name='autorule_lookup_idx'),
         ]

@@ -42,6 +42,16 @@ class ActionRunContext:
     correlation_id: uuid.UUID
     depth: int
     action_index: int
+    # Seed for an action's own idempotency token (e.g. a message's
+    # client_message_id), stable across *retries of the same logical unit of
+    # work*. For the normal engine path that's the same as execution_id (one
+    # execution, no retries). For a scheduled action, retries reuse the same
+    # ScheduledAction row but process_automation_jobs creates a FRESH
+    # AutomationExecution on every attempt — using execution_id there would
+    # mint a different client_message_id on every retry and silently defeat
+    # the duplicate-send guard, so that path seeds this from the stable
+    # ScheduledAction.id instead (see process_automation_jobs.py).
+    retry_seed: str
 
 
 def _record_event_once(event):
@@ -80,6 +90,17 @@ def _create_execution(rule, event, conv, status, condition_result):
     )
 
 
+def _record_bounded_skip(event, conv, reason):
+    """Loop/resource-exhaustion guards must never silently return with no
+    trace — an operator inspecting execution history needs to be able to
+    tell "the chain hit a bound here" apart from "nothing happened".
+    """
+    execution = _create_execution(None, event, conv, AutomationExecution.Status.SKIPPED_LOOP, None)
+    execution.error_summary = reason[:500]
+    execution.save(update_fields=['error_summary'])
+    return execution
+
+
 def process_event(event):
     """The single entry point for real (non-simulation) event processing.
     Simulation never calls this — see automations/simulation.py, which
@@ -87,14 +108,22 @@ def process_event(event):
     imports execute_action at all, so there is no code path by which a
     simulation request can reach a real mutation.
     """
-    if event.depth > MAX_AUTOMATION_DEPTH:
-        return
-
     if not _record_event_once(event):
         return  # already processed — idempotent no-op (test #39)
 
+    if event.depth > MAX_AUTOMATION_DEPTH:
+        _record_bounded_skip(
+            event, _get_conversation(event),
+            f'Depth {event.depth} exceeds MAX_AUTOMATION_DEPTH ({MAX_AUTOMATION_DEPTH}); chain stopped.',
+        )
+        return
+
     actions_so_far = AutomationActionExecution.objects.filter(execution__correlation_id=event.correlation_id).count()
     if actions_so_far >= MAX_ACTIONS_PER_CORRELATION:
+        _record_bounded_skip(
+            event, _get_conversation(event),
+            f'Correlation {event.correlation_id} reached MAX_ACTIONS_PER_CORRELATION ({MAX_ACTIONS_PER_CORRELATION}); chain stopped.',
+        )
         return
 
     conv = _get_conversation(event)
@@ -102,7 +131,7 @@ def process_event(event):
 
     rules = AutomationRule.objects.filter(
         workspace_id=event.workspace_id, trigger_type=event.event_type, is_active=True,
-    ).order_by('priority', 'created_at')
+    ).order_by('priority', 'created_at', 'id')
 
     now = timezone.now()
     for rule in rules:
@@ -150,7 +179,7 @@ def _run_rule(rule, event, conv, ctx):
     for i, action in enumerate(rule.actions or []):
         run_ctx = ActionRunContext(
             execution_id=execution.id, rule_id=str(rule.id), correlation_id=event.correlation_id,
-            depth=event.depth, action_index=i,
+            depth=event.depth, action_index=i, retry_seed=str(execution.id),
         )
         action_type = action.get('type', '')
         try:

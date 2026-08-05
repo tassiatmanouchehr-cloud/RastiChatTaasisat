@@ -154,7 +154,14 @@ class EngineOrchestrationTests(TestCase, AutomationTestMixin):
             depth=MAX_AUTOMATION_DEPTH + 1,
         )
         process_event(too_deep_event)
-        self.assertFalse(AutomationExecution.objects.filter(event_id=too_deep_event.event_id).exists())
+        # No rule ran (bounded), but the bound itself must leave an
+        # observable, explicit trace rather than silently doing nothing.
+        executions = AutomationExecution.objects.filter(event_id=too_deep_event.event_id)
+        self.assertEqual(executions.count(), 1)
+        skip = executions.get()
+        self.assertEqual(skip.status, AutomationExecution.Status.SKIPPED_LOOP)
+        self.assertIsNone(skip.rule)
+        self.assertIn('MAX_AUTOMATION_DEPTH', skip.error_summary)
 
     def test_max_actions_per_correlation_bounds_processing(self):
         self._rule(name='r1', actions=[{'type': 'ESCALATE', 'params': {}}])
@@ -177,4 +184,9 @@ class EngineOrchestrationTests(TestCase, AutomationTestMixin):
             correlation_id=correlation_id, depth=1,
         )
         process_event(bounded_event)
-        self.assertFalse(AutomationExecution.objects.filter(event_id=bounded_event.event_id).exists())
+        executions = AutomationExecution.objects.filter(event_id=bounded_event.event_id)
+        self.assertEqual(executions.count(), 1)
+        skip = executions.get()
+        self.assertEqual(skip.status, AutomationExecution.Status.SKIPPED_LOOP)
+        self.assertIsNone(skip.rule)
+        self.assertIn('MAX_ACTIONS_PER_CORRELATION', skip.error_summary)

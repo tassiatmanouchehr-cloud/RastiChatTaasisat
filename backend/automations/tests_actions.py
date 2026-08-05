@@ -19,6 +19,7 @@ def _ctx(action_index=0, execution_id=1, rule_id=None):
     # rule, and a null rule_id maps cleanly to the nullable FK.
     return ActionRunContext(
         execution_id=execution_id, rule_id=rule_id, correlation_id=uuid.uuid4(), depth=0, action_index=action_index,
+        retry_seed=str(execution_id),
     )
 
 
@@ -68,6 +69,20 @@ class ActionExecutionTests(TestCase, AutomationTestMixin):
         execute_action(self.conv, {'type': 'SET_STATUS', 'params': {'status': 'OPEN'}}, _ctx(action_index=1))
         self.conv.refresh_from_db()
         self.assertEqual(self.conv.status, 'OPEN')
+
+    def test_set_status_intermediate_state_routes_through_shared_service(self):
+        """PENDING (and the other intermediate statuses) previously bypassed
+        every service via a raw queryset .update() — must now go through
+        conv_services.set_status(), which audits and publishes like every
+        other status-changing service.
+        """
+        from audit.models import AuditEvent
+        execute_action(self.conv, {'type': 'SET_STATUS', 'params': {'status': 'PENDING'}}, _ctx())
+        self.conv.refresh_from_db()
+        self.assertEqual(self.conv.status, 'PENDING')
+        self.assertTrue(AuditEvent.objects.filter(
+            action='conversation_status_changed', target_type='conversation', target_id=str(self.conv.id),
+        ).exists())
 
     def test_reopen_already_open_conversation_is_a_safe_no_op(self):
         result, obj_type, obj_id = execute_action(self.conv, {'type': 'REOPEN_CONVERSATION', 'params': {}}, _ctx())

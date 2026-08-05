@@ -12,12 +12,21 @@ Every handler returns a small JSON-safe dict (never a model instance, never
 a stack trace) — this is exactly what gets persisted into
 AutomationActionExecution.result_summary.
 """
+from django.conf import settings
 from django.utils import timezone
 
 from conversations import services as conv_services
 from conversations.models import Conversation
 from notifications.models import Notification
 from notifications.services import notify
+
+# Conservative default cooldown for SEND_CUSTOMER_MESSAGE: bounds a
+# misconfigured or looping rule from flooding a visitor, without affecting
+# any normal single-fire (or even a handful of distinct rules firing on the
+# same conversation) usage. Override via Django settings if a workspace
+# genuinely needs a different ceiling.
+AUTOMATION_CUSTOMER_MESSAGE_RATE_LIMIT = getattr(settings, 'AUTOMATION_CUSTOMER_MESSAGE_RATE_LIMIT', 5)
+AUTOMATION_CUSTOMER_MESSAGE_RATE_WINDOW_SECONDS = getattr(settings, 'AUTOMATION_CUSTOMER_MESSAGE_RATE_WINDOW_SECONDS', 300)
 
 
 class ActionError(Exception):
@@ -110,7 +119,11 @@ def act_set_status(conv, params, ctx):
     elif target == Conversation.Status.OPEN and conv.status == Conversation.Status.CLOSED:
         conv_services.reopen_conversation(conv, actor=None)
     else:
-        Conversation.objects.filter(pk=conv.pk).update(status=target)
+        # Every other target status routes through the shared set_status()
+        # service (audit event, CONVERSATION_STATUS_CHANGED publish, ops
+        # broadcast) instead of a raw queryset .update() that silently
+        # bypassed all three.
+        conv_services.set_status(conv, actor=None, status=target, reason='Automation')
     return {'status': target}, 'conversation', str(conv.id)
 
 
@@ -136,10 +149,11 @@ def act_send_customer_message(conv, params, ctx):
         body = resolve_template(params['template'], conv)
     except TemplateError as exc:
         raise ActionError(str(exc))
-    client_msg_id = f'automation:{ctx.execution_id}:{ctx.action_index}'
+    client_msg_id = f'automation:{ctx.retry_seed}:{ctx.action_index}'
     from conversations.models import Message
     if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
         return {'skipped': 'duplicate'}, 'message', ''
+    _enforce_customer_message_rate_limit(conv)
     msg = Message.objects.create(
         conversation=conv, sender_type=Message.SenderType.SYSTEM, content=body,
         client_message_id=client_msg_id, message_type=Message.MessageType.TEXT,
@@ -147,6 +161,25 @@ def act_send_customer_message(conv, params, ctx):
     conv_services.broadcast_ops_event(conv.id, 'conversation.automation_message', {'content': body})
     _broadcast_widget_message(conv, msg)
     return {'message_id': str(msg.id)}, 'message', str(msg.id)
+
+
+def _enforce_customer_message_rate_limit(conv):
+    """Bounds SEND_CUSTOMER_MESSAGE to a rolling per-conversation ceiling —
+    the per-instance client_message_id dedup above only stops the exact same
+    action-instance firing twice, not a misconfigured rule (or loop) sending
+    many *distinct* automated messages to the same visitor in a short span.
+    """
+    from conversations.models import Message
+    window_start = timezone.now() - timezone.timedelta(seconds=AUTOMATION_CUSTOMER_MESSAGE_RATE_WINDOW_SECONDS)
+    recent = Message.objects.filter(
+        conversation=conv, sender_type=Message.SenderType.SYSTEM, message_type=Message.MessageType.TEXT,
+        created_at__gte=window_start,
+    ).count()
+    if recent >= AUTOMATION_CUSTOMER_MESSAGE_RATE_LIMIT:
+        raise ActionError(
+            f'Automated customer-message rate limit reached for this conversation '
+            f'({AUTOMATION_CUSTOMER_MESSAGE_RATE_LIMIT} per {AUTOMATION_CUSTOMER_MESSAGE_RATE_WINDOW_SECONDS}s).'
+        )
 
 
 def _broadcast_widget_message(conv, msg):
@@ -167,7 +200,7 @@ def _broadcast_widget_message(conv, msg):
 
 def act_create_internal_note(conv, params, ctx):
     from conversations.models import Message
-    client_msg_id = f'automation-note:{ctx.execution_id}:{ctx.action_index}'
+    client_msg_id = f'automation-note:{ctx.retry_seed}:{ctx.action_index}'
     if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
         return {'skipped': 'duplicate'}, 'message', ''
     note = Message.objects.create(
@@ -207,7 +240,7 @@ def _notification_targets(conv, target):
 
 def act_request_rating(conv, params, ctx):
     from conversations.models import Message
-    client_msg_id = f'automation-rating:{ctx.execution_id}:{ctx.action_index}'
+    client_msg_id = f'automation-rating:{ctx.retry_seed}:{ctx.action_index}'
     if Message.objects.filter(conversation=conv, client_message_id=client_msg_id).exists():
         return {'skipped': 'duplicate'}, 'message', ''
     msg = Message.objects.create(
@@ -237,7 +270,13 @@ def act_schedule_action(conv, params, ctx):
     execute_at = timezone.now() + timezone.timedelta(minutes=delay)
     scheduled = schedule_action(
         workspace=conv.workspace, rule_id=ctx.rule_id, conversation=conv, action_definition=params['action'],
-        execute_at=execute_at, correlation_id=ctx.correlation_id, depth=ctx.depth,
+        execute_at=execute_at, correlation_id=ctx.correlation_id,
+        # The wrapped action is the NEXT hop in the chain, not a continuation
+        # of this one — persisting ctx.depth (instead of ctx.depth + 1)
+        # under-counted the chain by one hop, letting a scheduled-action hop
+        # execute unchecked one level past where process_event's depth guard
+        # would otherwise have stopped it.
+        depth=ctx.depth + 1,
         idempotency_seed=f'{ctx.rule_id}:{conv.id}:{ctx.correlation_id}:{ctx.action_index}',
     )
     return {'scheduled_action_id': str(scheduled.id), 'execute_at': execute_at.isoformat()}, 'scheduled_action', str(scheduled.id)
