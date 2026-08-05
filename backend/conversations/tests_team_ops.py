@@ -199,3 +199,54 @@ class SupervisorSummaryTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {res.data["access"]}')
         summary = self.client.get('/api/v1/supervisor/summary/')
         self.assertEqual(summary.status_code, 403)
+
+
+class SupervisorSummaryQueryEfficiencyTests(TestCase):
+    """Regression for the audited N+1: by_queue/by_team used to run one
+    .count() per row, and the per-agent loop used to run a get_or_create +
+    count per agent. Proves the query count no longer scales with the
+    number of queues/teams/agents in the workspace.
+    """
+    def setUp(self):
+        self.client = APIClient()
+        self.platform = Platform.objects.create(name='P1')
+        self.workspace = Workspace.objects.create(name='WS1', platform=self.platform)
+        self.project = Project.objects.create(name='Store', workspace=self.workspace)
+        self.owner = User.objects.create_user(email='owner@test.com', password='pass1234')
+        WorkspaceMembership.objects.create(user=self.owner, workspace=self.workspace, role='WORKSPACE_OWNER')
+
+        for i in range(6):
+            team = Team.objects.create(workspace=self.workspace, name=f'Team {i}')
+            Queue.objects.create(workspace=self.workspace, team=team, name=f'Queue {i}')
+            agent = User.objects.create_user(email=f'agent{i}@test.com', password='pass1234')
+            WorkspaceMembership.objects.create(user=agent, workspace=self.workspace, role='WORKSPACE_OPERATOR')
+            TeamMembership.objects.create(team=team, user=agent, is_active=True)
+            visitor = Visitor.objects.create(project=self.project)
+            conv = Conversation.objects.create(
+                visitor=visitor, workspace=self.workspace, type=Conversation.Type.CUSTOMER,
+                status=Conversation.Status.OPEN, team=team,
+            )
+            Conversation.objects.filter(pk=conv.pk).update(assigned_to=agent)
+
+        res = self.client.post('/api/v1/auth/login/', {'email': 'owner@test.com', 'password': 'pass1234'}, format='json')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {res.data["access"]}')
+
+    def test_query_count_does_not_scale_with_teams_queues_agents(self):
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+
+        with CaptureQueriesContext(connection) as ctx:
+            res = self.client.get('/api/v1/supervisor/summary/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data['by_queue']), 6)
+        self.assertEqual(len(res.data['by_team']), 6)
+        # 6 created agents + the requesting owner, who is also a workspace member.
+        self.assertEqual(len(res.data['by_agent']), 7)
+        # An N+1 version of this view would run well over 30 queries here
+        # (2 per queue/team, ~2-3 per agent, on top of the fixed baseline).
+        # A bounded, fixed number of queries regardless of N stays well
+        # under that no matter how many teams/queues/agents exist.
+        self.assertLess(
+            len(ctx.captured_queries), 20,
+            f'Expected a bounded query count, got {len(ctx.captured_queries)} for 6 teams/queues/agents',
+        )
