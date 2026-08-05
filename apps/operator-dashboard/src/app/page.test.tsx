@@ -43,6 +43,11 @@ vi.mock('@/lib/api', () => ({
   markNotificationRead: vi.fn(),
   markAllNotificationsRead: vi.fn(),
   connectNotificationsWebSocket: vi.fn(() => ({ close: vi.fn() })),
+  fetchKBArticles: vi.fn(),
+  shareKBArticle: vi.fn(),
+  fetchMacros: vi.fn(),
+  previewMacro: vi.fn(),
+  executeMacro: vi.fn(),
 }));
 
 import {
@@ -53,6 +58,7 @@ import {
   fetchTeams, fetchQueues, claimConversation, transferConversation, escalateConversation, setConversationPriority,
   fetchAssignmentHistory, createInternalNote, fetchQuickReplies, applyQuickReply,
   fetchNotifications, fetchUnreadNotificationCount, markNotificationRead, markAllNotificationsRead,
+  fetchKBArticles, shareKBArticle, fetchMacros, previewMacro, executeMacro,
 } from '@/lib/api';
 
 const visitorA = { id: 'v1', name: 'سارا محمدی', email: null, mobile: '0912', created_at: '2024-01-01T00:00:00Z' };
@@ -100,6 +106,8 @@ function setDefaultMocks() {
   vi.mocked(fetchQuickReplies).mockResolvedValue([]);
   vi.mocked(fetchNotifications).mockResolvedValue([]);
   vi.mocked(fetchUnreadNotificationCount).mockResolvedValue({ count: 0 });
+  vi.mocked(fetchKBArticles).mockResolvedValue([]);
+  vi.mocked(fetchMacros).mockResolvedValue([]);
 }
 
 // jsdom doesn't implement scrollIntoView; the page calls it on every message-list update.
@@ -570,6 +578,89 @@ describe('Operator dashboard — customer conversations page', () => {
       await waitFor(() => expect(fetchAssignmentHistory).toHaveBeenCalledWith('c1'));
       expect(screen.getByText('برداشت از صف')).toBeDefined();
       expect(screen.getByText(/op1@test.com/)).toBeDefined();
+    });
+  });
+
+  describe('Knowledge Base + Macro composer integration', () => {
+    const article = { id: 'art-1', title: 'راهنمای مرجوعی', excerpt: 'خلاصه', status: 'PUBLISHED', visibility: 'CUSTOMER' };
+    const macro = { id: 'macro-1', name: 'درخواست مرجوعی', category: 'مرجوعی', description: '', is_active: true };
+
+    it('searches the Knowledge Base and sends an article card', async () => {
+      vi.mocked(fetchKBArticles).mockResolvedValue([article]);
+      vi.mocked(shareKBArticle).mockResolvedValue({
+        id: 'm3', sender_type: 'USER', content: 'راهنمای مرجوعی', message_type: 'ARTICLE', client_message_id: 'gen',
+        created_at: new Date().toISOString(), seen: true, attachment_url: null,
+        metadata: { article: { article_id: 'art-1', title: 'راهنمای مرجوعی', excerpt: 'خلاصه', category: '', url: '/kb/refund-guide' } },
+      });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByTitle('جستجوی پایگاه دانش'));
+      fireEvent.click(await screen.findByText('ارسال کارت مقاله'));
+      await waitFor(() => expect(shareKBArticle).toHaveBeenCalledWith('art-1', 'c1', expect.any(String)));
+    });
+
+    it('inserts an article link into the composer text instead of sending', async () => {
+      vi.mocked(fetchKBArticles).mockResolvedValue([article]);
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByTitle('جستجوی پایگاه دانش'));
+      fireEvent.click(await screen.findByText('درج در متن'));
+      expect(shareKBArticle).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText('پاسخ به مشتری…')).toHaveProperty('value', '[راهنمای مرجوعی]');
+    });
+
+    it('opens the macro palette, previews with no side effects, then confirms execution', async () => {
+      vi.mocked(fetchMacros).mockResolvedValue([macro]);
+      vi.mocked(previewMacro).mockResolvedValue({
+        macro_id: 'macro-1', macro_name: 'درخواست مرجوعی',
+        actions: [{ type: 'SEND_REPLY', preview: 'سلام سارا محمدی، درخواست شما ثبت شد.' }],
+      });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByTitle('اجرای ماکرو'));
+      fireEvent.click(await screen.findByText('درخواست مرجوعی'));
+
+      await waitFor(() => expect(previewMacro).toHaveBeenCalledWith('macro-1', 'c1'));
+      expect(await screen.findByText('سلام سارا محمدی، درخواست شما ثبت شد.')).toBeDefined();
+      // Preview alone must never execute anything.
+      expect(executeMacro).not.toHaveBeenCalled();
+
+      vi.mocked(executeMacro).mockResolvedValue({ id: 'exec-1', status: 'SUCCEEDED', action_executions: [] });
+      fireEvent.click(screen.getByText('تأیید و اجرا'));
+      await waitFor(() => expect(executeMacro).toHaveBeenCalledWith('macro-1', 'c1', expect.any(String)));
+    });
+
+    it('shows partial-failure detail after a macro execution with a failed action', async () => {
+      vi.mocked(fetchMacros).mockResolvedValue([macro]);
+      vi.mocked(previewMacro).mockResolvedValue({ macro_id: 'macro-1', macro_name: 'درخواست مرجوعی', actions: [] });
+      vi.mocked(executeMacro).mockResolvedValue({
+        id: 'exec-1', status: 'PARTIALLY_SUCCEEDED',
+        action_executions: [{ id: 'ae-1', action_index: 0, action_type: 'ADD_TAG', status: 'FAILED', error_summary: 'not found' }],
+      });
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByTitle('اجرای ماکرو'));
+      fireEvent.click(await screen.findByText('درخواست مرجوعی'));
+      fireEvent.click(await screen.findByText('تأیید و اجرا'));
+      await waitFor(() => expect(screen.getByText(/به‌صورت ناقص اجرا شد/)).toBeDefined());
+      expect(screen.getByText(/ADD_TAG/)).toBeDefined();
+    });
+
+    it('double-clicking confirm during an in-flight execution does not send a second request', async () => {
+      vi.mocked(fetchMacros).mockResolvedValue([macro]);
+      vi.mocked(previewMacro).mockResolvedValue({ macro_id: 'macro-1', macro_name: 'درخواست مرجوعی', actions: [] });
+      let resolveExecute: (v: unknown) => void = () => {};
+      vi.mocked(executeMacro).mockReturnValue(new Promise(resolve => { resolveExecute = resolve; }));
+      render(<DashboardPage />);
+      await selectConversation('سارا محمدی');
+      fireEvent.click(await screen.findByTitle('اجرای ماکرو'));
+      fireEvent.click(await screen.findByText('درخواست مرجوعی'));
+      const confirmBtn = await screen.findByText('تأیید و اجرا');
+      fireEvent.click(confirmBtn);
+      // While in flight the button is disabled — a second click can't fire another request.
+      fireEvent.click(screen.getByText('در حال اجرا…'));
+      expect(executeMacro).toHaveBeenCalledTimes(1);
+      await act(async () => { resolveExecute({ id: 'exec-1', status: 'SUCCEEDED', action_executions: [] }); });
     });
   });
 });
