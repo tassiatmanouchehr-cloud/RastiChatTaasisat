@@ -39,6 +39,7 @@ from django.utils import timezone
 from automations.actions import ActionError, execute_action
 from automations.engine import MAX_ACTIONS_PER_CORRELATION, ActionRunContext
 from automations.events import MAX_AUTOMATION_DEPTH, AutomationActionContext
+from automations.idempotency import reserve_action_slot
 from automations.models import AutomationActionExecution, AutomationExecution, AutomationRule, ScheduledAction
 
 DEFAULT_STALE_AFTER_SECONDS = getattr(settings, 'AUTOMATION_JOB_STALE_AFTER_SECONDS', 300)
@@ -215,6 +216,23 @@ class Command(BaseCommand):
             self._finish(job, ScheduledAction.Status.SKIPPED, error=loop_reason)
             return 'skipped'
 
+        # Hard, concurrency-safe reservation — a slot must be won BEFORE the
+        # action runs. Two truly concurrent workers each processing a
+        # DIFFERENT due ScheduledAction row in the SAME correlation near the
+        # boundary now serialize on AutomationCorrelationCounter's row lock:
+        # at most MAX_ACTIONS_PER_CORRELATION reservations can ever succeed
+        # for one correlation_id, closing the race the previous unlocked
+        # .count() read (both workers see "under the limit", both proceed)
+        # allowed.
+        if not reserve_action_slot(job.correlation_id, job.workspace_id, MAX_ACTIONS_PER_CORRELATION, reservation_key=str(job.id)):
+            reason = (
+                f'Correlation {job.correlation_id} reached MAX_ACTIONS_PER_CORRELATION '
+                f'({MAX_ACTIONS_PER_CORRELATION}); scheduled action skipped.'
+            )
+            self._record_loop_skip(job, conv, reason)
+            self._finish(job, ScheduledAction.Status.SKIPPED, error=reason)
+            return 'skipped'
+
         execution = AutomationExecution.objects.create(
             workspace=job.workspace, rule=job.rule, rule_name_snapshot=job.rule.name if job.rule_id else '',
             trigger_type=AutomationRule.Trigger.SCHEDULED_TIME_REACHED, event_id=uuid.uuid4(),
@@ -253,19 +271,17 @@ class Command(BaseCommand):
 
     @staticmethod
     def _loop_guard_reason(job):
-        """Mirrors engine.process_event's depth / action-count / same-rule
-        guards for the scheduled-action execution path, which previously
-        called execute_action() directly and enforced none of them.
+        """Mirrors engine.process_event's depth / same-rule guards for the
+        scheduled-action execution path, which previously called
+        execute_action() directly and enforced none of them. The
+        action-count bound is enforced separately, right before execution,
+        via the concurrency-safe reserve_action_slot() reservation — see
+        _run_job — not here, since a plain read-then-compare check (as this
+        used to do) cannot be made race-safe against a genuinely concurrent
+        second worker without the row lock reserve_action_slot() takes.
         """
         if job.depth > MAX_AUTOMATION_DEPTH:
             return f'Depth {job.depth} exceeds MAX_AUTOMATION_DEPTH ({MAX_AUTOMATION_DEPTH}); scheduled action skipped.'
-
-        actions_so_far = AutomationActionExecution.objects.filter(execution__correlation_id=job.correlation_id).count()
-        if actions_so_far >= MAX_ACTIONS_PER_CORRELATION:
-            return (
-                f'Correlation {job.correlation_id} reached MAX_ACTIONS_PER_CORRELATION '
-                f'({MAX_ACTIONS_PER_CORRELATION}); scheduled action skipped.'
-            )
 
         if job.rule_id:
             # NOT the same check engine.process_event does for an instant

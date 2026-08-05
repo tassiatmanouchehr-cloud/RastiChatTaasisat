@@ -5,7 +5,9 @@ from django.utils import timezone
 
 from .engine import MAX_ACTIONS_PER_CORRELATION, process_event
 from .events import MAX_AUTOMATION_DEPTH, TriggerEvent
-from .models import AutomationActionExecution, AutomationEvent, AutomationExecution, AutomationRule
+from .models import (
+    AutomationActionExecution, AutomationCorrelationCounter, AutomationEvent, AutomationExecution, AutomationRule,
+)
 from .tests_base import AutomationTestMixin
 
 
@@ -179,6 +181,14 @@ class EngineOrchestrationTests(TestCase, AutomationTestMixin):
             AutomationActionExecution(execution=execution, action_index=i, action_type='ESCALATE', status='SUCCEEDED')
             for i in range(MAX_ACTIONS_PER_CORRELATION)
         ])
+        # The hard, concurrency-safe bound now lives in
+        # AutomationCorrelationCounter (reserved via reserve_action_slot),
+        # not a live .count() of AutomationActionExecution rows — the
+        # correlation's reservation ledger must reflect the same "already
+        # at the cap" state the bulk-created rows above represent.
+        AutomationCorrelationCounter.objects.create(
+            correlation_id=correlation_id, workspace=self.ws, actions_reserved=MAX_ACTIONS_PER_CORRELATION,
+        )
         bounded_event = TriggerEvent(
             event_type='CONVERSATION_CREATED', workspace_id=str(self.ws.id), conversation_id=str(self.conv.id),
             correlation_id=correlation_id, depth=1,
@@ -190,3 +200,39 @@ class EngineOrchestrationTests(TestCase, AutomationTestMixin):
         self.assertEqual(skip.status, AutomationExecution.Status.SKIPPED_LOOP)
         self.assertIsNone(skip.rule)
         self.assertIn('MAX_ACTIONS_PER_CORRELATION', skip.error_summary)
+
+    def test_action_limit_reached_mid_rule_truncates_remaining_actions(self):
+        """Two actions in one rule; the correlation is exactly one slot
+        short of the cap when the rule starts — the first action must still
+        run for real (it wins the last slot), the second must be reserved
+        via the SAME per-action reserve_action_slot() call and lose,
+        recorded as a SKIPPED AutomationActionExecution rather than
+        silently vanishing or running unbounded.
+        """
+        self._rule(name='two-actions', actions=[
+            {'type': 'SET_PRIORITY', 'params': {'priority': 'HIGH'}},
+            {'type': 'ADD_TAG', 'params': {'tag_id': str(uuid.uuid4())}},  # never reached — would fail resolution anyway
+        ])
+        correlation_id = uuid.uuid4()
+        AutomationCorrelationCounter.objects.create(
+            correlation_id=correlation_id, workspace=self.ws, actions_reserved=MAX_ACTIONS_PER_CORRELATION - 1,
+        )
+        event = TriggerEvent(
+            event_type='CONVERSATION_CREATED', workspace_id=str(self.ws.id), conversation_id=str(self.conv.id),
+            correlation_id=correlation_id, depth=0,
+        )
+        process_event(event)
+
+        self.conv.refresh_from_db()
+        self.assertEqual(self.conv.priority, 'HIGH')  # the first action actually ran
+
+        execution = AutomationExecution.objects.get(event_id=event.event_id)
+        self.assertEqual(execution.status, AutomationExecution.Status.PARTIALLY_SUCCEEDED)
+        action_execs = list(execution.action_executions.order_by('action_index'))
+        self.assertEqual(len(action_execs), 2)
+        self.assertEqual(action_execs[0].status, AutomationActionExecution.Status.SUCCEEDED)
+        self.assertEqual(action_execs[1].status, AutomationActionExecution.Status.SKIPPED)
+        self.assertIn('MAX_ACTIONS_PER_CORRELATION', action_execs[1].error_summary)
+
+        counter = AutomationCorrelationCounter.objects.get(correlation_id=correlation_id)
+        self.assertEqual(counter.actions_reserved, MAX_ACTIONS_PER_CORRELATION)  # exactly the cap, never over

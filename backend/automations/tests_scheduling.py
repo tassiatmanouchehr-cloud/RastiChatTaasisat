@@ -7,7 +7,9 @@ from django.utils import timezone
 
 from .engine import MAX_ACTIONS_PER_CORRELATION
 from .events import MAX_AUTOMATION_DEPTH
-from .models import AutomationActionExecution, AutomationExecution, AutomationRule, ScheduledAction
+from .models import (
+    AutomationActionExecution, AutomationCorrelationCounter, AutomationExecution, AutomationRule, ScheduledAction,
+)
 from .scheduling import schedule_action
 from .tests_base import AutomationTestMixin
 
@@ -352,6 +354,12 @@ class ScheduledLoopGuardTests(TestCase, AutomationTestMixin):
             AutomationActionExecution(execution=seed_execution, action_index=i, action_type='ESCALATE', status='SUCCEEDED')
             for i in range(MAX_ACTIONS_PER_CORRELATION)
         ])
+        # The hard, concurrency-safe bound now lives in
+        # AutomationCorrelationCounter (reserved via reserve_action_slot),
+        # not a live .count() of AutomationActionExecution rows.
+        AutomationCorrelationCounter.objects.create(
+            correlation_id=correlation_id, workspace=self.ws, actions_reserved=MAX_ACTIONS_PER_CORRELATION,
+        )
         job = self._due_job(depth=1, correlation_id=correlation_id)
         call_command('process_automation_jobs')
         job.refresh_from_db()

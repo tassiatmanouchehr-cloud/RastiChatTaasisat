@@ -30,7 +30,10 @@ from django.utils import timezone
 from .actions import ActionError, execute_action
 from .conditions import ConditionContext, evaluate_condition
 from .events import AutomationActionContext, MAX_AUTOMATION_DEPTH
-from .models import AutomationRule, AutomationEvent, AutomationExecution, AutomationActionExecution
+from .idempotency import reserve_action_slot
+from .models import (
+    AutomationRule, AutomationEvent, AutomationExecution, AutomationActionExecution, AutomationCorrelationCounter,
+)
 
 MAX_ACTIONS_PER_CORRELATION = 40
 
@@ -118,8 +121,16 @@ def process_event(event):
         )
         return
 
-    actions_so_far = AutomationActionExecution.objects.filter(execution__correlation_id=event.correlation_id).count()
-    if actions_so_far >= MAX_ACTIONS_PER_CORRELATION:
+    # Cheap, non-authoritative fast path: if the correlation's real,
+    # row-locked counter already shows the hard cap reached, skip evaluating
+    # any rules at all rather than creating MATCHED executions whose every
+    # action would immediately fail to reserve a slot anyway. This can never
+    # under-count (the counter only ever reflects real, committed
+    # reservations — see reserve_action_slot), so a "not yet at the cap"
+    # read here is always safe to proceed past; the actual enforcement is
+    # the per-action reserve_action_slot() call inside _run_rule's loop.
+    counter = AutomationCorrelationCounter.objects.filter(correlation_id=event.correlation_id).first()
+    if counter and counter.actions_reserved >= MAX_ACTIONS_PER_CORRELATION:
         _record_bounded_skip(
             event, _get_conversation(event),
             f'Correlation {event.correlation_id} reached MAX_ACTIONS_PER_CORRELATION ({MAX_ACTIONS_PER_CORRELATION}); chain stopped.',
@@ -176,12 +187,33 @@ def _run_rule(rule, event, conv, ctx):
     execution = _create_execution(rule, event, conv, AutomationExecution.Status.MATCHED, True)
     any_failed = False
     any_succeeded = False
+    limit_reached = False
     for i, action in enumerate(rule.actions or []):
+        action_type = action.get('type', '')
+
+        # Hard, concurrency-safe reservation: a slot must be won BEFORE the
+        # action runs. Two truly concurrent workers processing different
+        # events in the SAME correlation both hitting this near the boundary
+        # serialize on AutomationCorrelationCounter's row lock — at most
+        # MAX_ACTIONS_PER_CORRELATION reservations can ever succeed for one
+        # correlation_id, unlike the previous unlocked .count() read that
+        # let both readers see "under the limit" and both proceed.
+        if not reserve_action_slot(
+            event.correlation_id, event.workspace_id, MAX_ACTIONS_PER_CORRELATION,
+            reservation_key=f'{execution.id}:{i}',
+        ):
+            AutomationActionExecution.objects.create(
+                execution=execution, action_index=i, action_type=action_type,
+                status=AutomationActionExecution.Status.SKIPPED,
+                error_summary=f'MAX_ACTIONS_PER_CORRELATION ({MAX_ACTIONS_PER_CORRELATION}) reached; action limit exceeded.',
+            )
+            limit_reached = True
+            break  # every later action (this rule or any later rule) would fail the same reservation — stop now
+
         run_ctx = ActionRunContext(
             execution_id=execution.id, rule_id=str(rule.id), correlation_id=event.correlation_id,
             depth=event.depth, action_index=i, retry_seed=str(execution.id),
         )
-        action_type = action.get('type', '')
         try:
             with AutomationActionContext(event.correlation_id, event.depth):
                 result, obj_type, obj_id = execute_action(conv, action, run_ctx)
@@ -206,8 +238,10 @@ def _run_rule(rule, event, conv, ctx):
 
     if any_failed and any_succeeded:
         final_status = AutomationExecution.Status.PARTIALLY_SUCCEEDED
-    elif any_failed:
+    elif any_failed or (limit_reached and not any_succeeded):
         final_status = AutomationExecution.Status.FAILED
+    elif limit_reached:
+        final_status = AutomationExecution.Status.PARTIALLY_SUCCEEDED
     else:
         final_status = AutomationExecution.Status.SUCCEEDED
 
@@ -216,9 +250,12 @@ def _run_rule(rule, event, conv, ctx):
     execution.save(update_fields=['status', 'duration_ms'])
     _finalize_rule_stats(rule)
 
-    return rule.stop_processing and final_status in (
+    # A limit hit forces the whole event's rule loop to stop too — every
+    # remaining rule's actions would fail the same reservation regardless of
+    # this rule's own stop_processing setting.
+    return limit_reached or (rule.stop_processing and final_status in (
         AutomationExecution.Status.SUCCEEDED, AutomationExecution.Status.PARTIALLY_SUCCEEDED,
-    )
+    ))
 
 
 def _finalize_rule_stats(rule):
