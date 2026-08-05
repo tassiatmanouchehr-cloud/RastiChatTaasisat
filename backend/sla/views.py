@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 
 from common.mixins import WorkspaceScopedQuerysetMixin
 from common.pagination import StandardPagination
-from common.permissions import IsWorkspaceAdmin, IsWorkspaceOperator
+from common.permissions import IsWorkspaceAdminOfObject, IsWorkspaceOperator, require_workspace_admin
 from common.tenancy import resolve_operator_workspace
 from conversations.models import Conversation
 from .models import BusinessCalendar, WorkingInterval, Holiday, SLAPolicy
@@ -24,11 +24,12 @@ class BusinessCalendarViewSet(WorkspaceScopedQuerysetMixin, viewsets.ModelViewSe
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
             return [IsWorkspaceOperator()]
-        return [IsWorkspaceAdmin()]
+        return [IsWorkspaceAdminOfObject()]
 
     def create(self, request, *args, **kwargs):
         workspace = resolve_operator_workspace(request.user, request.data.get('workspace'))
-        serializer = self.get_serializer(data=request.data)
+        require_workspace_admin(request.user, workspace)
+        serializer = self.get_serializer(data=request.data, context={**self.get_serializer_context(), 'workspace': workspace})
         serializer.is_valid(raise_exception=True)
         calendar = serializer.save(workspace=workspace)
         return Response(self.get_serializer(calendar).data, status=status.HTTP_201_CREATED)
@@ -58,11 +59,12 @@ class SLAPolicyViewSet(WorkspaceScopedQuerysetMixin, viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
             return [IsWorkspaceOperator()]
-        return [IsWorkspaceAdmin()]
+        return [IsWorkspaceAdminOfObject()]
 
     def create(self, request, *args, **kwargs):
         workspace = resolve_operator_workspace(request.user, request.data.get('workspace'))
-        serializer = self.get_serializer(data=request.data)
+        require_workspace_admin(request.user, workspace)
+        serializer = self.get_serializer(data=request.data, context={**self.get_serializer_context(), 'workspace': workspace})
         serializer.is_valid(raise_exception=True)
         policy = serializer.save(workspace=workspace)
         return Response(self.get_serializer(policy).data, status=status.HTTP_201_CREATED)

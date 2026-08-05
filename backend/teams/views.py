@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from audit.models import AuditEvent
 from common.mixins import WorkspaceScopedQuerysetMixin
 from common.pagination import StandardPagination
-from common.permissions import IsWorkspaceAdmin, IsWorkspaceOperator
+from common.permissions import IsWorkspaceAdminOfObject, IsWorkspaceOperator, require_workspace_admin
 from common.tenancy import resolve_operator_workspace
 from .models import Team, TeamMembership
 from .serializers import TeamSerializer
@@ -29,11 +29,12 @@ class TeamViewSet(WorkspaceScopedQuerysetMixin, viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
             return [IsWorkspaceOperator()]
-        return [IsWorkspaceAdmin()]
+        return [IsWorkspaceAdminOfObject()]
 
     def create(self, request, *args, **kwargs):
         workspace = resolve_operator_workspace(request.user, request.data.get('workspace'))
-        serializer = self.get_serializer(data=request.data)
+        require_workspace_admin(request.user, workspace)
+        serializer = self.get_serializer(data=request.data, context={**self.get_serializer_context(), 'workspace': workspace})
         serializer.is_valid(raise_exception=True)
         team = serializer.save(workspace=workspace)
         AuditEvent.objects.create(

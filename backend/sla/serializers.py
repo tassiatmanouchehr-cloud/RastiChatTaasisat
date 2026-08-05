@@ -36,6 +36,14 @@ class SLAPolicySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'workspace', 'created_at', 'updated_at']
 
+    def validate(self, attrs):
+        workspace = self.instance.workspace if self.instance else self.context.get('workspace')
+        for field in ('queue', 'team', 'calendar'):
+            value = attrs.get(field, getattr(self.instance, field, None) if self.instance else None)
+            if value and workspace and value.workspace_id != workspace.id:
+                raise serializers.ValidationError({field: f'{field.capitalize()} must belong to the same workspace as the policy.'})
+        return attrs
+
 
 class ConversationSLASerializer(serializers.ModelSerializer):
     policy_name = serializers.CharField(source='policy_name_snapshot', read_only=True)

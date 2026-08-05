@@ -30,3 +30,10 @@ class TeamSerializer(serializers.ModelSerializer):
 
     def get_member_count(self, obj):
         return obj.memberships.filter(is_active=True).count()
+
+    def validate(self, attrs):
+        manager = attrs.get('manager', self.instance.manager if self.instance else None)
+        workspace = self.instance.workspace if self.instance else self.context.get('workspace')
+        if manager and workspace and not manager.workspace_memberships.filter(workspace=workspace).exists():
+            raise serializers.ValidationError({'manager': 'Manager must belong to the same workspace.'})
+        return attrs

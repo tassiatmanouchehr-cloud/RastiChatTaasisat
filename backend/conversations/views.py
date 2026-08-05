@@ -1,6 +1,7 @@
 import json
 from django.db import models
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, permissions as drf_permissions
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.decorators import action
@@ -11,7 +12,7 @@ from .serializers import ConversationSerializer, MessageSerializer, AssignmentSe
 from .media_validation import validate_and_normalize_upload, UploadValidationError
 from . import services as conv_services
 from common.pagination import StandardPagination
-from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent, IsSupervisorOrAdmin
+from common.permissions import IsWorkspaceOperator, IsWorkspaceAdmin, IsPlatformSupportAgent, user_can_supervise_workspace
 from common.tenancy import resolve_operator_workspace
 from visitors.models import Visitor, VisitorSession
 from catalog.models import Product
@@ -621,7 +622,12 @@ class OperationalSummaryView(APIView):
     health. Operational queries only — no analytics warehouse, no long-range
     aggregation beyond the requested `hours` window for average first response.
     """
-    permission_classes = [IsSupervisorOrAdmin]
+    # Coarse gate only — the real, workspace-specific authorization happens
+    # below, after the target workspace is resolved. A global "is this user
+    # a supervisor/admin of *some* workspace" permission class was the
+    # audited vulnerability: it let a supervisor of Workspace A view
+    # Workspace B's summary merely by holding any membership in B.
+    permission_classes = [drf_permissions.IsAuthenticated]
 
     def get(self, request):
         from accounts.models import OperatorPresence
@@ -629,6 +635,8 @@ class OperationalSummaryView(APIView):
         from queues.models import Queue
 
         workspace = resolve_operator_workspace(request.user, request.query_params.get('workspace_id'))
+        if not user_can_supervise_workspace(request.user, workspace):
+            raise PermissionDenied('Not authorized to view this workspace\'s operational summary')
         try:
             hours = int(request.query_params.get('hours', 24))
         except ValueError:
@@ -651,27 +659,54 @@ class OperationalSummaryView(APIView):
             | models.Q(sla__resolution_breached_at__isnull=False)
         ).distinct().count()
 
+        # Aggregated in one query per breakdown rather than one .count() per
+        # row — see docs/runbooks/TEAM_OPERATIONS_LOCAL_RUN.md known-issues
+        # history; this used to be an N+1 (one query per queue/team, plus a
+        # get_or_create + count per agent).
+        active_conv_filter = models.Q(
+            conversations__type=Conversation.Type.CUSTOMER, conversations__status__in=Conversation.ACTIVE_STATUSES,
+        )
         by_queue = [
-            {'queue_id': str(q.id), 'name': q.name, 'active_count': active.filter(queue=q).count()}
-            for q in Queue.objects.filter(workspace=workspace, is_active=True)
+            {'queue_id': str(row['id']), 'name': row['name'], 'active_count': row['active_count']}
+            for row in Queue.objects.filter(workspace=workspace, is_active=True)
+            .annotate(active_count=models.Count('conversations', filter=active_conv_filter, distinct=True))
+            .order_by('routing_priority', 'name').values('id', 'name', 'active_count')
         ]
         by_team = [
-            {'team_id': str(t.id), 'name': t.name, 'active_count': active.filter(team=t).count()}
-            for t in Team.objects.filter(workspace=workspace, is_active=True)
+            {'team_id': str(row['id']), 'name': row['name'], 'active_count': row['active_count']}
+            for row in Team.objects.filter(workspace=workspace, is_active=True)
+            .annotate(active_count=models.Count('conversations', filter=active_conv_filter, distinct=True))
+            .order_by('name').values('id', 'name', 'active_count')
         ]
 
+        memberships = list(workspace.memberships.select_related('user').all())
+        user_ids = [m.user_id for m in memberships]
+        presences = {p.user_id: p for p in OperatorPresence.objects.filter(user_id__in=user_ids)}
+        # Mirrors OperatorPresence.active_conversation_count() exactly (all
+        # conversation types, not just CUSTOMER — that method has no type
+        # filter), just computed for every agent in one query instead of one
+        # query per agent. No row is created here for an agent with no
+        # presence yet — a read-only summary should not have that side
+        # effect; a sensible in-memory default stands in for the response.
+        active_counts = dict(
+            Conversation.objects.filter(assigned_to_id__in=user_ids)
+            .exclude(status__in=[Conversation.Status.CLOSED, Conversation.Status.RESOLVED])
+            .values('assigned_to_id').annotate(c=models.Count('id')).values_list('assigned_to_id', 'c')
+        )
         agents = []
-        for membership in workspace.memberships.select_related('user').all():
+        for membership in memberships:
             user = membership.user
-            presence, _ = OperatorPresence.objects.get_or_create(user=user, defaults={'status': OperatorPresence.Status.OFFLINE})
-            active_count = presence.active_conversation_count()
+            presence = presences.get(user.id)
+            active_count = active_counts.get(user.id, 0)
+            max_capacity = presence.max_capacity if presence else OperatorPresence.DEFAULT_MAX_CAPACITY
+            status_ = presence.effective_status() if presence else OperatorPresence.Status.OFFLINE
             agents.append({
                 'user_id': str(user.id),
                 'display_name': user.display_name or user.email.split('@')[0],
-                'status': presence.effective_status(),
+                'status': status_,
                 'active_conversation_count': active_count,
-                'max_capacity': presence.max_capacity,
-                'at_capacity': active_count >= presence.max_capacity,
+                'max_capacity': max_capacity,
+                'at_capacity': active_count >= max_capacity,
             })
 
         responded = base.filter(sla__first_responded_at__gte=since, sla__isnull=False)
