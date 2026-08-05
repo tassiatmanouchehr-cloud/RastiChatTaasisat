@@ -20,6 +20,8 @@ from conversations.models import Conversation
 from notifications.models import Notification
 from notifications.services import notify
 
+from .idempotency import run_idempotent
+
 # Conservative default cooldown for SEND_CUSTOMER_MESSAGE: bounds a
 # misconfigured or looping rule from flooding a visitor, without affecting
 # any normal single-fire (or even a handful of distinct rules firing on the
@@ -64,81 +66,148 @@ def _resolve_tag(workspace, tag_id):
     return tag
 
 
+def _idempotency_key(ctx, conv, action_type, extra=''):
+    """Deterministic, retry-stable key for run_idempotent(): built from
+    ctx.retry_seed (stable across retries of the SAME logical unit of work —
+    a ScheduledAction's own id for the scheduled path, never a per-attempt
+    AutomationExecution id), the rule, the conversation, the action type,
+    and the action's position — plus an optional per-recipient suffix for
+    multi-recipient actions. Two DIFFERENT scheduled/instant firings (e.g.
+    two separate rule matches, or two distinct SCHEDULE_ACTION hops) always
+    get different retry_seeds, so legitimate repeats are never suppressed —
+    only a genuine retry of the identical attempt reuses this key.
+    """
+    key = f'{ctx.retry_seed}:{ctx.rule_id or ""}:{conv.id}:{action_type}:{ctx.action_index}'
+    return f'{key}:{extra}' if extra else key
+
+
 def act_assign_to_agent(conv, params, ctx):
     agent = _resolve_agent(conv.workspace, params['agent_id'])
-    conv_services.assign_to_agent(conv, actor=None, target_user_id=agent.id, reason='Automation')
-    return {'assigned_to': str(agent.id)}, 'user', str(agent.id)
+
+    def _do():
+        conv_services.assign_to_agent(conv, actor=None, target_user_id=agent.id, reason='Automation')
+        return {'assigned_to': str(agent.id)}, 'user', str(agent.id)
+
+    key = _idempotency_key(ctx, conv, 'ASSIGN_TO_AGENT')
+    return run_idempotent(key, 'ASSIGN_TO_AGENT', conv.workspace_id, conv, _do)
 
 
 def act_assign_to_team(conv, params, ctx):
     team = _resolve_team(conv.workspace, params['team_id'])
-    conv_services.transfer_team(conv, actor=None, new_team_id=team.id, reason='Automation')
-    return {'team_id': str(team.id)}, 'team', str(team.id)
+
+    def _do():
+        conv_services.transfer_team(conv, actor=None, new_team_id=team.id, reason='Automation')
+        return {'team_id': str(team.id)}, 'team', str(team.id)
+
+    key = _idempotency_key(ctx, conv, 'ASSIGN_TO_TEAM')
+    return run_idempotent(key, 'ASSIGN_TO_TEAM', conv.workspace_id, conv, _do)
 
 
 def act_assign_using_queue_strategy(conv, params, ctx):
     from queues.services import auto_assign
     queue = _resolve_queue(conv.workspace, params['queue_id'])
-    updated = auto_assign(conv, queue)
-    return {'assigned_to': str(updated.assigned_to_id) if updated.assigned_to_id else None}, 'conversation', str(conv.id)
+
+    def _do():
+        updated = auto_assign(conv, queue)
+        return {'assigned_to': str(updated.assigned_to_id) if updated.assigned_to_id else None}, 'conversation', str(conv.id)
+
+    key = _idempotency_key(ctx, conv, 'ASSIGN_USING_QUEUE_STRATEGY')
+    return run_idempotent(key, 'ASSIGN_USING_QUEUE_STRATEGY', conv.workspace_id, conv, _do)
 
 
 def act_unassign(conv, params, ctx):
-    conv_services.unassign(conv, actor=None, reason='Automation')
-    return {}, 'conversation', str(conv.id)
+    def _do():
+        conv_services.unassign(conv, actor=None, reason='Automation')
+        return {}, 'conversation', str(conv.id)
+
+    key = _idempotency_key(ctx, conv, 'UNASSIGN')
+    return run_idempotent(key, 'UNASSIGN', conv.workspace_id, conv, _do)
 
 
 def act_return_to_queue(conv, params, ctx):
-    conv_services.return_to_queue(conv, actor=None, reason='Automation')
-    return {}, 'conversation', str(conv.id)
+    def _do():
+        conv_services.return_to_queue(conv, actor=None, reason='Automation')
+        return {}, 'conversation', str(conv.id)
+
+    key = _idempotency_key(ctx, conv, 'RETURN_TO_QUEUE')
+    return run_idempotent(key, 'RETURN_TO_QUEUE', conv.workspace_id, conv, _do)
 
 
 def act_transfer_to_team(conv, params, ctx):
     team = _resolve_team(conv.workspace, params['team_id'])
-    conv_services.transfer_team(conv, actor=None, new_team_id=team.id, reason=params.get('reason', 'Automation'))
-    return {'team_id': str(team.id)}, 'team', str(team.id)
+
+    def _do():
+        conv_services.transfer_team(conv, actor=None, new_team_id=team.id, reason=params.get('reason', 'Automation'))
+        return {'team_id': str(team.id)}, 'team', str(team.id)
+
+    key = _idempotency_key(ctx, conv, 'TRANSFER_TO_TEAM')
+    return run_idempotent(key, 'TRANSFER_TO_TEAM', conv.workspace_id, conv, _do)
 
 
 def act_escalate(conv, params, ctx):
-    conv_services.escalate(conv, actor=None, reason=params.get('reason', 'Automation'))
-    return {}, 'conversation', str(conv.id)
+    def _do():
+        conv_services.escalate(conv, actor=None, reason=params.get('reason', 'Automation'))
+        return {}, 'conversation', str(conv.id)
+
+    key = _idempotency_key(ctx, conv, 'ESCALATE')
+    return run_idempotent(key, 'ESCALATE', conv.workspace_id, conv, _do)
 
 
 def act_set_priority(conv, params, ctx):
     from conversations.models import PriorityChange
-    conv_services.set_priority(
-        conv, actor=None, priority=params['priority'], reason='Automation', reason_code=PriorityChange.Reason.MANUAL,
-    )
-    return {'priority': params['priority']}, 'conversation', str(conv.id)
+
+    def _do():
+        conv_services.set_priority(
+            conv, actor=None, priority=params['priority'], reason='Automation', reason_code=PriorityChange.Reason.MANUAL,
+        )
+        return {'priority': params['priority']}, 'conversation', str(conv.id)
+
+    key = _idempotency_key(ctx, conv, 'SET_PRIORITY')
+    return run_idempotent(key, 'SET_PRIORITY', conv.workspace_id, conv, _do)
 
 
 def act_set_status(conv, params, ctx):
     target = params['status']
-    if target == Conversation.Status.CLOSED:
-        conv_services.close_conversation(conv, actor=None)
-    elif target == Conversation.Status.OPEN and conv.status == Conversation.Status.CLOSED:
-        conv_services.reopen_conversation(conv, actor=None)
-    else:
-        # Every other target status routes through the shared set_status()
-        # service (audit event, CONVERSATION_STATUS_CHANGED publish, ops
-        # broadcast) instead of a raw queryset .update() that silently
-        # bypassed all three.
-        conv_services.set_status(conv, actor=None, status=target, reason='Automation')
-    return {'status': target}, 'conversation', str(conv.id)
+
+    def _do():
+        if target == Conversation.Status.CLOSED:
+            conv_services.close_conversation(conv, actor=None)
+        elif target == Conversation.Status.OPEN and conv.status == Conversation.Status.CLOSED:
+            conv_services.reopen_conversation(conv, actor=None)
+        else:
+            # Every other target status routes through the shared set_status()
+            # service (audit event, CONVERSATION_STATUS_CHANGED publish, ops
+            # broadcast) instead of a raw queryset .update() that silently
+            # bypassed all three.
+            conv_services.set_status(conv, actor=None, status=target, reason='Automation')
+        return {'status': target}, 'conversation', str(conv.id)
+
+    key = _idempotency_key(ctx, conv, 'SET_STATUS')
+    return run_idempotent(key, 'SET_STATUS', conv.workspace_id, conv, _do)
 
 
 def act_add_tag(conv, params, ctx):
     from customer_context.models import ConversationTag
     tag = _resolve_tag(conv.workspace, params['tag_id'])
-    ConversationTag.objects.get_or_create(conversation=conv, tag=tag, defaults={'created_by': None})
-    return {'tag_id': str(tag.id)}, 'tag', str(tag.id)
+
+    def _do():
+        ConversationTag.objects.get_or_create(conversation=conv, tag=tag, defaults={'created_by': None})
+        return {'tag_id': str(tag.id)}, 'tag', str(tag.id)
+
+    key = _idempotency_key(ctx, conv, 'ADD_TAG', extra=str(tag.id))
+    return run_idempotent(key, 'ADD_TAG', conv.workspace_id, conv, _do)
 
 
 def act_remove_tag(conv, params, ctx):
     from customer_context.models import ConversationTag
     tag = _resolve_tag(conv.workspace, params['tag_id'])
-    ConversationTag.objects.filter(conversation=conv, tag=tag).delete()
-    return {'tag_id': str(tag.id)}, 'tag', str(tag.id)
+
+    def _do():
+        ConversationTag.objects.filter(conversation=conv, tag=tag).delete()
+        return {'tag_id': str(tag.id)}, 'tag', str(tag.id)
+
+    key = _idempotency_key(ctx, conv, 'REMOVE_TAG', extra=str(tag.id))
+    return run_idempotent(key, 'REMOVE_TAG', conv.workspace_id, conv, _do)
 
 
 def act_send_customer_message(conv, params, ctx):
@@ -211,18 +280,35 @@ def act_create_internal_note(conv, params, ctx):
     return {'note_id': str(note.id)}, 'message', str(note.id)
 
 
+def _notify_recipients_idempotently(conv, params, ctx, action_type, recipients):
+    """Each recipient gets their OWN idempotency key (the action itself may
+    fan out to several people), so a crash-point-B retry that already
+    notified recipient A but crashed before reaching B does not re-notify
+    A — A's key is already completed and returns its cached result, while B
+    (and anyone after) still runs for real. A single recipient's failure
+    does not roll back an earlier recipient's already-completed
+    notification (run_idempotent only ever deletes/retries its OWN key).
+    """
+    notified = []
+    for user in recipients:
+        def _do(user=user):
+            notify(user, conv.workspace, Notification.EventType.AUTOMATION_TRIGGERED, params['title'][:255], {'conversation_id': str(conv.id)})
+            return {'notified': str(user.id)}, 'user', str(user.id)
+
+        key = _idempotency_key(ctx, conv, action_type, extra=str(user.id))
+        run_idempotent(key, action_type, conv.workspace_id, conv, _do)
+        notified.append(str(user.id))
+    return {'recipient_count': len(notified)}, 'conversation', str(conv.id)
+
+
 def act_send_notification(conv, params, ctx):
     recipients = _notification_targets(conv, params.get('target', 'ASSIGNEE'))
-    for user in recipients:
-        notify(user, conv.workspace, Notification.EventType.AUTOMATION_TRIGGERED, params['title'][:255], {'conversation_id': str(conv.id)})
-    return {'recipient_count': len(recipients)}, 'conversation', str(conv.id)
+    return _notify_recipients_idempotently(conv, params, ctx, 'SEND_NOTIFICATION', recipients)
 
 
 def act_notify_supervisor(conv, params, ctx):
     recipients = _notification_targets(conv, 'TEAM_SUPERVISORS')
-    for user in recipients:
-        notify(user, conv.workspace, Notification.EventType.AUTOMATION_TRIGGERED, params['title'][:255], {'conversation_id': str(conv.id)})
-    return {'recipient_count': len(recipients)}, 'conversation', str(conv.id)
+    return _notify_recipients_idempotently(conv, params, ctx, 'NOTIFY_SUPERVISOR', recipients)
 
 
 def _notification_targets(conv, target):
@@ -252,16 +338,24 @@ def act_request_rating(conv, params, ctx):
 
 
 def act_close_conversation(conv, params, ctx):
-    conv_services.close_conversation(conv, actor=None)
-    return {}, 'conversation', str(conv.id)
+    def _do():
+        conv_services.close_conversation(conv, actor=None)
+        return {}, 'conversation', str(conv.id)
+
+    key = _idempotency_key(ctx, conv, 'CLOSE_CONVERSATION')
+    return run_idempotent(key, 'CLOSE_CONVERSATION', conv.workspace_id, conv, _do)
 
 
 def act_reopen_conversation(conv, params, ctx):
-    try:
-        conv_services.reopen_conversation(conv, actor=None)
-    except conv_services.ConversationServiceError:
-        return {'skipped': 'not_closed'}, 'conversation', str(conv.id)
-    return {}, 'conversation', str(conv.id)
+    def _do():
+        try:
+            conv_services.reopen_conversation(conv, actor=None)
+        except conv_services.ConversationServiceError:
+            return {'skipped': 'not_closed'}, 'conversation', str(conv.id)
+        return {}, 'conversation', str(conv.id)
+
+    key = _idempotency_key(ctx, conv, 'REOPEN_CONVERSATION')
+    return run_idempotent(key, 'REOPEN_CONVERSATION', conv.workspace_id, conv, _do)
 
 
 def act_schedule_action(conv, params, ctx):
