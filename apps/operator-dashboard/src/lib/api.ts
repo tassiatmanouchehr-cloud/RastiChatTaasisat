@@ -477,6 +477,7 @@ export const simulateAutomationDraft = async (triggerType: string, conditions: u
 
 export const fetchAutomationRegistry = async () => {
     const res = await fetch(`${API_BASE}/automations/registry/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (res.status === 403) throw new Error('403: دسترسی به اتوماسیون‌ها فقط برای مدیران فضای کاری است');
     if (!res.ok) throw new Error('Failed to fetch automation registry');
     return res.json();
 };

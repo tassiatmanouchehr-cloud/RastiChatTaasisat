@@ -405,6 +405,11 @@ function RuleForm({ rule, registry, teams, queues, tags, onSaved, onCancel }: {
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
 
+    // A starter-template draft is passed in as a full AutomationRule-shaped
+    // object (id: '') so the form can be pre-filled — but it isn't a saved
+    // rule yet. Whether to PATCH or POST must key off a real id, not mere
+    // object presence, or a template "creation" would PATCH a blank id.
+    const isExisting = Boolean(rule?.id);
     const allowedActionTypes = Object.keys(registry.actions);
 
     const buildPayload = () => ({
@@ -425,7 +430,7 @@ function RuleForm({ rule, registry, teams, queues, tags, onSaved, onCancel }: {
         setError(''); setBusy(true);
         try {
             const payload = buildPayload();
-            if (rule) await updateAutomationRule(rule.id, payload);
+            if (isExisting && rule) await updateAutomationRule(rule.id, payload);
             else await createAutomationRule(payload);
             onSaved();
         } catch (e: unknown) {
@@ -436,7 +441,7 @@ function RuleForm({ rule, registry, teams, queues, tags, onSaved, onCancel }: {
     return (
         <div className="border border-gray-200 rounded-xl bg-white p-4 flex flex-col gap-4">
             <div className="flex items-center justify-between">
-                <h2 className="font-bold text-sm text-gray-700">{rule ? 'ویرایش قانون' : 'قانون جدید'}</h2>
+                <h2 className="font-bold text-sm text-gray-700">{isExisting ? 'ویرایش قانون' : 'قانون جدید'}</h2>
                 <button onClick={onCancel} className="text-xs text-gray-400 hover:text-gray-600">انصراف</button>
             </div>
 
@@ -516,7 +521,7 @@ function RuleForm({ rule, registry, teams, queues, tags, onSaved, onCancel }: {
             <div className="flex justify-end gap-2">
                 <button onClick={onCancel} className="text-xs px-3 py-2 rounded-lg border border-gray-200 text-gray-500">انصراف</button>
                 <button onClick={handleSave} disabled={busy || !name} className="text-xs font-semibold px-4 py-2 rounded-lg bg-terracotta text-white disabled:opacity-50">
-                    {busy ? 'در حال ذخیره…' : rule ? 'ذخیره تغییرات' : 'ایجاد قانون'}
+                    {busy ? 'در حال ذخیره…' : isExisting ? 'ذخیره تغییرات' : 'ایجاد قانون'}
                 </button>
             </div>
         </div>
