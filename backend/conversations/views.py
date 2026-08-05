@@ -354,19 +354,32 @@ class StartCustomerChatView(APIView):
     permission_classes = []
     def post(self, request):
         from django.core.exceptions import ValidationError
+        from django.db import transaction
         try:
             session = VisitorSession.objects.get(token=request.data.get('session_token'))
         except (VisitorSession.DoesNotExist, ValidationError):
             return Response({'error': 'Invalid session'}, status=status.HTTP_401_UNAUTHORIZED)
-        conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
-        if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
+        with transaction.atomic():
+            conv, created = Conversation.objects.get_or_create(visitor=session.visitor, workspace=session.visitor.project.workspace, type=Conversation.Type.CUSTOMER, status=Conversation.Status.OPEN)
+            if not created and conv.status == 'CLOSED': conv.status = 'OPEN'; conv.save()
+            if created:
+                from queues.services import route_new_conversation
+                from sla.services import apply_sla
+                from automations.events import publish_event
+                # Routing/SLA must be persisted BEFORE CONVERSATION_CREATED is
+                # published — an automation condition on conversation.queue_id,
+                # operational.queue_has_capacity, or conversation.sla_state must
+                # see the conversation's real, final creation-time state, not an
+                # unrouted, SLA-less intermediate one. publish_event() itself only
+                # schedules delivery via transaction.on_commit(), so wrapping the
+                # whole sequence in one atomic block also means a failure here
+                # (e.g. routing/SLA raising) rolls back the conversation creation
+                # too, rather than leaving a misleading published event with no
+                # backing conversation state.
+                conv = route_new_conversation(conv)
+                apply_sla(conv)
+                publish_event('CONVERSATION_CREATED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM')
         if created:
-            from queues.services import route_new_conversation
-            from sla.services import apply_sla
-            from automations.events import publish_event
-            publish_event('CONVERSATION_CREATED', conv.workspace_id, conversation_id=conv.id, actor_type='SYSTEM')
-            conv = route_new_conversation(conv)
-            apply_sla(conv)
             conv_services.broadcast_ops_event(conv.id, 'conversation.queued', conv_services.conversation_summary(conv))
         data = ConversationSerializer(conv).data
         data['branding'] = build_widget_branding(conv)

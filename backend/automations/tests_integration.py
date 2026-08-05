@@ -90,6 +90,16 @@ class DomainServiceIntegrationTests(TestCase, AutomationTestMixin):
             conv_services.reopen_conversation(self.conv, actor=None)
         self.assertTrue(Message.objects.filter(conversation=self.conv, message_type=Message.MessageType.INTERNAL_NOTE).exists())
 
+    def test_status_change_triggers_automation(self):
+        """CONVERSATION_STATUS_CHANGED had zero publishers before set_status()
+        (added alongside the SET_STATUS action fix) — this is the first real
+        wiring of that trigger type.
+        """
+        self._rule(AutomationRule.Trigger.CONVERSATION_STATUS_CHANGED, actions=[{'type': 'CREATE_INTERNAL_NOTE', 'params': {'content': 'status changed'}}])
+        with self.captureOnCommitCallbacks(execute=True):
+            conv_services.set_status(self.conv, actor=None, status='PENDING')
+        self.assertTrue(Message.objects.filter(conversation=self.conv, message_type=Message.MessageType.INTERNAL_NOTE).exists())
+
     def test_queue_entry_triggers_automation(self):
         self._rule(AutomationRule.Trigger.CONVERSATION_QUEUED, actions=[{'type': 'CREATE_INTERNAL_NOTE', 'params': {'content': 'queued'}}])
         with self.captureOnCommitCallbacks(execute=True):
@@ -127,6 +137,67 @@ class HttpEndpointIntegrationTests(TestCase, AutomationTestMixin):
         self.assertEqual(res.status_code, 200)
         conv = Conversation.objects.get(id=res.data['id'])
         self.assertEqual(conv.priority, 'HIGH')
+
+    def test_conversation_created_sees_final_queue_team_sla_state(self):
+        """Regression for the CONVERSATION_CREATED ordering bug: routing and
+        SLA application must be persisted BEFORE the event is published, so
+        a condition on conversation.queue_id/team_id/sla_state sees the
+        conversation's real, final creation-time state — not an unrouted,
+        SLA-less intermediate one.
+        """
+        from teams.models import Team
+        from queues.models import Queue
+        from sla.models import SLAPolicy
+
+        team = Team.objects.create(workspace=self.ws, name='Sales')
+        queue = Queue.objects.create(workspace=self.ws, team=team, name='Main Queue')
+        SLAPolicy.objects.create(
+            workspace=self.ws, name='Default', first_response_target_minutes=30,
+            next_response_target_minutes=60, resolution_target_minutes=240,
+        )
+        AutomationRule.objects.create(
+            workspace=self.ws, name='sees routed state', is_active=True, trigger_type=AutomationRule.Trigger.CONVERSATION_CREATED,
+            conditions={'field': 'conversation.queue_id', 'operator': 'exists'},
+            actions=[{'type': 'SET_PRIORITY', 'params': {'priority': 'HIGH'}}],
+        )
+        session = VisitorSession.objects.create(visitor=self.visitor)
+        Conversation.objects.filter(pk=self.conv.pk).delete()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            res = self.client.post('/api/v1/widget/start/', {'session_token': str(session.token)}, format='json')
+        self.assertEqual(res.status_code, 200)
+        conv = Conversation.objects.get(id=res.data['id'])
+        self.assertEqual(conv.queue_id, queue.id)
+        self.assertEqual(conv.team_id, team.id)
+        self.assertTrue(hasattr(conv, 'sla'))
+        # The condition on conversation.queue_id must have matched at trigger
+        # time (not just be true "by the time we check now") — the action it
+        # gated on only runs if the engine saw queue_id already set.
+        self.assertEqual(conv.priority, 'HIGH')
+
+    def test_resumed_existing_conversation_does_not_republish_created_event(self):
+        """A visitor re-opening an already-open conversation must not look
+        like a second CONVERSATION_CREATED."""
+        AutomationRule.objects.create(
+            workspace=self.ws, name='on create', is_active=True, trigger_type=AutomationRule.Trigger.CONVERSATION_CREATED,
+            conditions={}, actions=[{'type': 'CREATE_INTERNAL_NOTE', 'params': {'content': 'created'}}],
+        )
+        session = VisitorSession.objects.create(visitor=self.visitor)
+        Conversation.objects.filter(pk=self.conv.pk).delete()  # start fresh so the first call actually creates one
+        with self.captureOnCommitCallbacks(execute=True):
+            res1 = self.client.post('/api/v1/widget/start/', {'session_token': str(session.token)}, format='json')
+        self.assertEqual(res1.status_code, 200)
+        first_conv_id = res1.data['id']
+
+        with self.captureOnCommitCallbacks(execute=True):
+            res2 = self.client.post('/api/v1/widget/start/', {'session_token': str(session.token)}, format='json')
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.data['id'], first_conv_id)  # same conversation, resumed not recreated
+
+        note_count = Message.objects.filter(
+            conversation_id=first_conv_id, message_type=Message.MessageType.INTERNAL_NOTE,
+        ).count()
+        self.assertEqual(note_count, 1)  # exactly one CONVERSATION_CREATED, from the first call only
 
     def test_operator_send_message_triggers_automation(self):
         AutomationRule.objects.create(

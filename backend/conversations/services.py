@@ -261,6 +261,38 @@ def set_priority(conversation, actor, priority, reason='', reason_code=None):
     return conv
 
 
+def set_status(conversation, actor, status, reason=''):
+    """Generic status transition for statuses with no dedicated service of
+    their own (PENDING, WAITING_FOR_WORKSPACE, WAITING_FOR_PLATFORM,
+    RESOLVED, and a same-value OPEN no-op). CLOSED and OPEN-from-CLOSED
+    still go through the SLA-aware close_conversation()/reopen_conversation()
+    — callers should special-case those the same way the CLOSE_CONVERSATION/
+    REOPEN_CONVERSATION automation actions already do; this service is only
+    for the intermediate statuses that previously had no service at all and
+    were reached via a raw queryset .update() bypassing audit, the
+    CONVERSATION_STATUS_CHANGED event, and the realtime ops broadcast.
+    """
+    from .models import Conversation
+
+    if status not in Conversation.Status.values:
+        raise ConversationServiceError('Invalid status', 400)
+    with transaction.atomic():
+        conv = Conversation.objects.select_for_update().get(pk=conversation.pk)
+        previous_status = conv.status
+        if previous_status == status:
+            return conv
+        conv.status = status
+        conv.save(update_fields=['status'])
+    _audit(actor, 'conversation_status_changed', conv, {'from': previous_status, 'to': status, 'reason': reason})
+    broadcast_ops_event(conv.id, 'conversation.status_updated', conversation_summary(conv))
+    publish_event(
+        'CONVERSATION_STATUS_CHANGED', conv.workspace_id, conversation_id=conv.id,
+        actor_id=actor.id if actor else None, actor_type='USER' if actor else 'SYSTEM',
+        payload={'from': previous_status, 'to': status},
+    )
+    return conv
+
+
 def close_conversation(conversation, actor=None):
     """Shared by CustomerConversationViewSet.close and the CLOSE_CONVERSATION
     automation action — a single, safe implementation instead of two.
