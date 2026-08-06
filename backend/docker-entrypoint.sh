@@ -32,7 +32,21 @@ case "$1" in
     exec python manage.py collectstatic --noinput
     ;;
   check-deploy)
-    exec python manage.py check --deploy
+    # --fail-level WARNING is required: `check --deploy` alone treats a
+    # weak/short DJANGO_SECRET_KEY (security.W009) as a WARNING, and
+    # Django's check command only exits non-zero on ERROR-level findings by
+    # default — a weak secret would otherwise be printed but never actually
+    # block a deploy.
+    #
+    # --tag security scopes this to Django's security-tagged checks only —
+    # without it, --fail-level WARNING also catches drf_spectacular's
+    # unrelated API-schema-generation warnings (present on every run,
+    # nothing to do with deploy safety), which would make this step red
+    # forever regardless of the actual deployment's security posture.
+    # config/settings.py's SILENCED_SYSTEM_CHECKS additionally silences
+    # security.W021 (HSTS preload), a deliberate opt-in the project
+    # already accounts for, not something a deploy should ever block on.
+    exec python manage.py check --deploy --fail-level WARNING --tag security
     ;;
   test)
     shift

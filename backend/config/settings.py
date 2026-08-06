@@ -421,6 +421,16 @@ else:
     SECURE_HSTS_PRELOAD = False
     X_FRAME_OPTIONS = 'DENY'
 
+# security.W021 ("SECURE_HSTS_PRELOAD is not True") fires precisely when
+# SECURE_HSTS_PRELOAD is the deliberate default above — submitting to the
+# browser preload list is a one-way, hard-to-reverse decision an operator
+# opts into via SECURE_HSTS_PRELOAD=1, not something that should ever be a
+# blocking condition. Silenced so `manage.py check --deploy --fail-level
+# WARNING` (scripts/staging/deploy.sh's deploy-time security gate) can
+# treat WARNING as "block the deploy" without this permanently-present,
+# already-accounted-for advisory tripping it on every single deploy.
+SILENCED_SYSTEM_CHECKS = ['security.W021']
+
 # Content-Security-Policy for the handful of HTML pages Django itself
 # renders (admin, DRF's browsable API, error pages) — applied via
 # common.middleware.SecurityHeadersMiddleware rather than Django's own CSP

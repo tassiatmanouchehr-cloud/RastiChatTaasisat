@@ -61,15 +61,24 @@ jobs:
         # settings.py guardrails a staging/production deploy would hit —
         # a real regression here (e.g. someone reintroducing DEBUG=1 as a
         # default, or dropping a security header) should fail the build,
-        # not just get logged.
-        run: python manage.py check --deploy
+        # not just get logged. --fail-level WARNING --tag security is the
+        # exact command docker-entrypoint.sh's check-deploy subcommand
+        # runs (see config/tests_settings_guardrails.py for why both flags
+        # are required together, not just --fail-level WARNING alone).
+        # The secret is freshly random per run, not a fixed string —
+        # a fixed CI-only secret could accidentally sit exactly on
+        # security.W009's length/entropy threshold and never actually
+        # exercise this gate.
+        run: |
+          DJANGO_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" \
+            python manage.py check --deploy --fail-level WARNING --tag security
         env:
           ENVIRONMENT: staging
           DEBUG: "0"
-          DJANGO_SECRET_KEY: ci-staging-check-only-not-a-real-secret-0123456789
           ALLOWED_HOSTS: ci-staging-check.example.com
           CSRF_TRUSTED_ORIGINS: https://ci-staging-check.example.com
           CORS_ALLOWED_ORIGINS: https://ci-staging-check.example.com
+          MONITORING_TOKEN: ci-staging-check-monitoring-token-not-real
       - name: Migration drift check
         run: python manage.py makemigrations --check --dry-run
       - name: Migrate
