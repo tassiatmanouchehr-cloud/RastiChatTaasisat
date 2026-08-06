@@ -24,6 +24,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from accounts.models import User
+from automations.models import AutomationRule
 from customer_context.models import Tag
 from knowledge_base.models import KnowledgeBaseCategory
 from macros.models import Macro
@@ -128,6 +129,19 @@ class Command(BaseCommand):
                 ],
                 'visibility': Macro.Visibility.WORKSPACE, 'is_active': False,
                 'description': 'ماکروی نمایشی محیط استیجینگ — قبل از استفاده بررسی و فعال شود.',
+            },
+        )
+
+        # Inactive by default, same convention as the KB category/macro
+        # above — an admin (the staging smoke suite itself, scenario 14)
+        # must deliberately activate it before it fires. Exists so the
+        # smoke suite can verify real automation execution without needing
+        # to drive the full condition-builder UI from a blind script.
+        AutomationRule.objects.get_or_create(
+            workspace=ws, name='STAGING — تعیین اولویت بالا', defaults={
+                'trigger_type': AutomationRule.Trigger.CONVERSATION_CREATED,
+                'conditions': {}, 'actions': [{'type': 'SET_PRIORITY', 'params': {'priority': 'HIGH'}}],
+                'is_active': False,
             },
         )
 

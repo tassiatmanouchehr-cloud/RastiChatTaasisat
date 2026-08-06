@@ -5,6 +5,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 
 from accounts.models import User
+from automations.models import AutomationRule
 from workspaces.models import Workspace
 
 
@@ -30,6 +31,8 @@ class SeedStagingDataTests(TestCase):
         self.assertTrue(os.path.exists('test-staging-credentials.txt'))
         mode = oct(os.stat('test-staging-credentials.txt').st_mode)[-3:]
         self.assertEqual(mode, '600')
+        rule = AutomationRule.objects.get(name='STAGING — تعیین اولویت بالا')
+        self.assertFalse(rule.is_active)
 
     def test_is_idempotent(self):
         call_command('seed_staging_data', '--yes', '--output=test-staging-credentials.txt')
