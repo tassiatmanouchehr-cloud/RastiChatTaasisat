@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from common.views import HealthCheckView
+from common.views import HealthCheckView, LivenessView, MonitoringView, ReadinessView
 from conversations.views import (
     CustomerConversationViewSet, PlatformSupportViewSet, WorkspaceSupportViewSet,
     StartCustomerChatView, MessageListView, SendMessageView,
@@ -49,6 +49,9 @@ router.register(r'macros', MacroViewSet, basename='macro')
 urlpatterns = [
     path('auth/', include('accounts.urls')),
     path('health/', HealthCheckView.as_view(), name='health-check'),
+    path('health/live/', LivenessView.as_view(), name='health-live'),
+    path('health/ready/', ReadinessView.as_view(), name='health-ready'),
+    path('health/monitoring/', MonitoringView.as_view(), name='health-monitoring'),
     path('widget/init/', include('visitors.urls')),
     path('widget/start/', StartCustomerChatView.as_view(), name='widget-start'),
     # These three must be resolved BEFORE the router include below: the

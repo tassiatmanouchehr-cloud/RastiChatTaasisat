@@ -3,6 +3,7 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from common.pagination import StandardPagination
@@ -144,6 +145,17 @@ class MacroViewSet(viewsets.ModelViewSet):
         except services.MacroError as exc:
             return Response({'error': exc.message}, status=exc.status_code)
         return Response(result)
+
+    def get_throttles(self):
+        # `throttle_scope` isn't a pre-declared attribute on APIView, so it
+        # can't be passed as an `@action(...)` kwarg the way `detail`/
+        # `methods` can (DRF's ViewSet.as_view() rejects initkwargs that
+        # aren't already class attributes) — set it dynamically here,
+        # scoped to just the `execute` action, instead.
+        if self.action == 'execute':
+            self.throttle_scope = 'macro_execution'
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     @action(detail=True, methods=['post'])
     def execute(self, request, pk=None):

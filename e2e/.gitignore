@@ -3,3 +3,5 @@ test-results/
 playwright-report/
 .fixture.json
 tests/tmp/
+staging-smoke/tmp/
+staging-smoke/smoke-report/

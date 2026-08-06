@@ -1,5 +1,6 @@
 from rest_framework import status
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
@@ -8,7 +9,11 @@ from .presence import touch_presence
 
 class LoginView(APIView):
     permission_classes = []
-    
+    # IP-scoped (the requester is anonymous to DRF at this point) — the
+    # classic credential-stuffing/brute-force target.
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
+
     def post(self, request):
         email = request.data.get('email')
         password = request.data.get('password')

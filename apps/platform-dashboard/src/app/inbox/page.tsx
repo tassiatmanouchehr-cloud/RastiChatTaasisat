@@ -20,7 +20,13 @@ export default function PlatformInboxPage() {
 
     useEffect(() => {
         if (!localStorage.getItem('token')) { router.push('/login'); return; }
-        loadInbox();
+        // Inlined rather than calling the hoisted `loadInbox` (matches the
+        // pattern already used by apps/operator-dashboard/src/app/support/page.tsx's
+        // equivalent effect) — react-hooks/set-state-in-effect can't verify
+        // a same-file async function's timing and flags it defensively;
+        // an inline .then() is directly recognizable as a fire-and-forget
+        // fetch, not a synchronous state update.
+        fetchPlatformInbox().then(setConversations).catch(() => {});
     }, []);
 
     const handleSelectConv = async (conv: Conversation) => {
