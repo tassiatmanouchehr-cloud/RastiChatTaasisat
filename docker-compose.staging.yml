@@ -240,5 +240,23 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  # Bind-mounted (not a plain Docker-managed volume) so host-level Nginx
+  # can serve /media/ and /static/ directly — Django's DEBUG-only static-
+  # file helpers (django.contrib.staticfiles' runserver integration and
+  # config/urls.py's `if settings.DEBUG: ... static(MEDIA_URL, ...)`) are
+  # both inert with DEBUG=0, so nothing else would ever serve these paths
+  # in staging/production. Paths configurable so they can live wherever
+  # the VPS's disk layout puts persistent app data; scripts/staging/deploy.sh
+  # creates them before first `docker compose up`.
   media_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${MEDIA_HOST_PATH:-/opt/rastichat/media}
   static_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${STATIC_HOST_PATH:-/opt/rastichat/staticfiles}
