@@ -7,6 +7,36 @@ from django.test import TestCase, override_settings
 from common.models import SchedulerHeartbeat
 
 
+class HealthcheckHostTests(TestCase):
+    """backend/Dockerfile.prod's own HEALTHCHECK curls
+    http://127.0.0.1:PORT/api/v1/health/live/ from *inside* the container —
+    that request's Host header is literally '127.0.0.1:8000'. Proves
+    settings.py's ALLOWED_HOSTS append (see config/settings.py, right after
+    the ALLOWED_HOSTS fail-fast guard) actually lets that request through
+    rather than getting rejected with DisallowedHost, which would
+    permanently fail the container's own healthcheck (and therefore every
+    depends_on: condition: service_healthy in docker-compose.staging.yml)
+    on every real deployment — this exact failure was caught for real in
+    CI once the docker-build job got far enough to actually start the
+    backend container.
+    """
+
+    def test_loopback_host_header_is_allowed(self):
+        res = self.client.get('/api/v1/health/live/', HTTP_HOST='127.0.0.1:8000')
+        self.assertEqual(res.status_code, 200)
+
+    def test_localhost_host_header_is_allowed(self):
+        res = self.client.get('/api/v1/health/live/', HTTP_HOST='localhost:8000')
+        self.assertEqual(res.status_code, 200)
+
+    def test_arbitrary_host_header_is_still_rejected(self):
+        # The fix is scoped to loopback/localhost only — proves it didn't
+        # accidentally widen ALLOWED_HOSTS into a wildcard.
+        with override_settings(ALLOWED_HOSTS=['127.0.0.1', 'localhost']):
+            res = self.client.get('/api/v1/health/live/', HTTP_HOST='some-attacker-controlled-host.example')
+        self.assertEqual(res.status_code, 400)
+
+
 class SchedulerHeartbeatCommandTests(TestCase):
     def test_records_and_updates_heartbeat(self):
         call_command('record_scheduler_heartbeat', 'automation-worker', 'SUCCESS')

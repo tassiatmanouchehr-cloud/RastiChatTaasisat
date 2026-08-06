@@ -89,6 +89,18 @@ if IS_PRODUCTION_LIKE and (not ALLOWED_HOSTS or '*' in ALLOWED_HOSTS):
         'ALLOWED_HOSTS must be a non-empty, non-wildcard comma-separated list of hostnames '
         'when ENVIRONMENT is staging or production (e.g. "chat-staging.rastisi.ir").'
     )
+# backend/Dockerfile.prod's own HEALTHCHECK (and docker-compose.staging.yml's
+# depends_on: backend: condition: service_healthy, which operator-dashboard/
+# platform-dashboard/automation-worker/sla-worker all rely on) curls
+# http://127.0.0.1:PORT/api/v1/health/live/ from *inside* the container —
+# that request's Host header is literally "127.0.0.1:8000", which the real
+# ALLOWED_HOSTS above (correctly locked to the real external domain) would
+# otherwise reject with DisallowedHost, permanently failing the
+# container's own healthcheck. Only reachable from inside the container/
+# Docker network or the host's own loopback (the published port only binds
+# 127.0.0.1, never 0.0.0.0 — see docker-compose.staging.yml), so allowing it
+# doesn't extend what the public internet can reach.
+ALLOWED_HOSTS = list(ALLOWED_HOSTS) + ['127.0.0.1', 'localhost']
 
 CSRF_TRUSTED_ORIGINS = _env_list('CSRF_TRUSTED_ORIGINS')
 if IS_PRODUCTION_LIKE and not CSRF_TRUSTED_ORIGINS:
