@@ -10,8 +10,11 @@ Produces, in `$BACKUP_DIR` (default `/opt/rastichat/backups`):
 
 - `rastichat-db-<timestamp>.sql.gz` (+ `.sha256`) — `pg_dump | gzip`.
 - `rastichat-media-<timestamp>.tar.gz` (+ `.sha256`) — the media directory.
-- `rastichat-meta-<timestamp>.json` — timestamp, database name, both
-  checksums, image tag, git SHA. **Never contains secrets** — the `.env`
+- `rastichat-meta-<timestamp>.json` — timestamp, database name, **both**
+  archives' filenames, checksums, and sizes (`db_backup_sha256`/
+  `db_backup_size_bytes`, `media_backup_sha256`/`media_backup_size_bytes` —
+  the latter three are `null` if there was no media directory yet to back
+  up), image tag, git SHA. **Never contains secrets** — the `.env`
   file itself is deliberately not copied into the backup.
 
 Refuses to overwrite an existing file of the same name (timestamped to
@@ -31,9 +34,12 @@ Run on a schedule (cron/systemd timer), e.g. daily at 03:00:
 scripts/staging/verify-backup.sh /opt/rastichat/backups/rastichat-db-<timestamp>.sql.gz
 ```
 
-Checks the sha256 checksum and the gzip/tar stream integrity. Run this
-before trusting any backup you're about to restore from, especially one
-copied off the VPS first.
+Checks the sha256 checksum and the gzip/tar stream integrity — and, given
+a DB backup file, also finds that timestamp's `rastichat-meta-*.json` and,
+if it names a media backup, verifies that archive too (one backup "set" is
+one thing to trust, not two files to remember to check separately). Run
+this before trusting any backup you're about to restore from, especially
+one copied off the VPS first.
 
 ## Restore
 

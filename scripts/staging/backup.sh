@@ -54,13 +54,26 @@ else
 fi
 
 GIT_SHA="$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || echo unknown)"
+DB_SIZE_BYTES="$(stat -c%s "$DB_DEST" 2>/dev/null || stat -f%z "$DB_DEST")"
+if [ -n "$MEDIA_DEST" ]; then
+  MEDIA_BACKUP_FILE_JSON="\"$(basename "$MEDIA_DEST")\""
+  MEDIA_BACKUP_SHA256_JSON="\"$(awk '{print $1}' "${MEDIA_DEST}.sha256")\""
+  MEDIA_SIZE_BYTES="$(stat -c%s "$MEDIA_DEST" 2>/dev/null || stat -f%z "$MEDIA_DEST")"
+else
+  MEDIA_BACKUP_FILE_JSON="null"
+  MEDIA_BACKUP_SHA256_JSON="null"
+  MEDIA_SIZE_BYTES="null"
+fi
 cat > "$META_DEST" <<JSON
 {
   "timestamp": "${TIMESTAMP}",
   "database_name": "${DB_NAME}",
   "db_backup_file": "$(basename "$DB_DEST")",
   "db_backup_sha256": "$(awk '{print $1}' "${DB_DEST}.sha256")",
-  "media_backup_file": "$([ -n "$MEDIA_DEST" ] && basename "$MEDIA_DEST" || echo null)",
+  "db_backup_size_bytes": ${DB_SIZE_BYTES},
+  "media_backup_file": ${MEDIA_BACKUP_FILE_JSON},
+  "media_backup_sha256": ${MEDIA_BACKUP_SHA256_JSON},
+  "media_backup_size_bytes": ${MEDIA_SIZE_BYTES},
   "image_tag": "${IMAGE_TAG:-staging}",
   "git_sha": "${GIT_SHA}"
 }
