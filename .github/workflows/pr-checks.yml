@@ -262,6 +262,13 @@ jobs:
       - name: Deploy full stack
         run: $COMPOSE up -d
 
+      - name: Dump backend logs if the stack failed to come up
+        if: failure()
+        run: |
+          $COMPOSE ps
+          echo "--- backend logs ---"
+          $COMPOSE logs backend || true
+
       - name: Wait for backend readiness
         run: |
           for i in $(seq 1 30); do
