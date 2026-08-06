@@ -308,6 +308,23 @@ CHANNEL_LAYERS = {
 WIDGET_WS_MESSAGE_RATE_LIMIT = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_LIMIT', 30))
 WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS = int(os.environ.get('WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS', 60))
 
+# Matches the same-named values docker-compose.staging.yml passes to
+# docker-scheduler-loop.sh — common.views.SchedulerStatusView uses these to
+# judge whether a scheduler's last recorded heartbeat (see
+# common/models.py:SchedulerHeartbeat) is stale, so keep them in sync with
+# the actual loop interval rather than hardcoding a guess here.
+AUTOMATION_WORKER_INTERVAL_SECONDS = int(os.environ.get('AUTOMATION_WORKER_INTERVAL_SECONDS', 30))
+SLA_WORKER_INTERVAL_SECONDS = int(os.environ.get('SLA_WORKER_INTERVAL_SECONDS', 60))
+
+# Read by common.views.MonitoringView's backup-freshness check and by
+# scripts/staging/backup.sh (the actual writer) — same path, single source
+# of truth. BACKUP_MAX_AGE_HOURS is deliberately generous (a bit more than
+# 24h) so a backup that's merely running a little late doesn't page anyone;
+# see docs/runbooks/MONITORING_RUNBOOK.md for the real alerting threshold.
+BACKUP_DIR = os.environ.get('BACKUP_DIR', str(BASE_DIR / 'backups'))
+BACKUP_MAX_AGE_HOURS = int(os.environ.get('BACKUP_MAX_AGE_HOURS', 26))
+DISK_USAGE_WARNING_PERCENT = int(os.environ.get('DISK_USAGE_WARNING_PERCENT', 85))
+
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
 

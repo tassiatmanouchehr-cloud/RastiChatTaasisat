@@ -1,0 +1,65 @@
+import os
+import time
+
+from django.core.management import call_command
+from django.test import TestCase, override_settings
+
+from common.models import SchedulerHeartbeat
+
+
+class SchedulerHeartbeatCommandTests(TestCase):
+    def test_records_and_updates_heartbeat(self):
+        call_command('record_scheduler_heartbeat', 'automation-worker', 'SUCCESS')
+        row = SchedulerHeartbeat.objects.get(name='automation-worker')
+        self.assertEqual(row.status, 'SUCCESS')
+
+        call_command('record_scheduler_heartbeat', 'automation-worker', 'FAILURE', '--detail=boom')
+        row.refresh_from_db()
+        self.assertEqual(row.status, 'FAILURE')
+        self.assertEqual(row.detail, 'boom')
+        self.assertEqual(SchedulerHeartbeat.objects.count(), 1)
+
+
+class MonitoringViewTests(TestCase):
+    def test_reports_scheduler_never_seen_as_stale(self):
+        res = self.client.get('/api/v1/health/monitoring/')
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.data['schedulers']['automation-worker']['seen'])
+        self.assertTrue(res.data['schedulers']['automation-worker']['stale'])
+
+    def test_reports_recent_heartbeat_as_not_stale(self):
+        call_command('record_scheduler_heartbeat', 'automation-worker', 'SUCCESS')
+        res = self.client.get('/api/v1/health/monitoring/')
+        self.assertFalse(res.data['schedulers']['automation-worker']['stale'])
+        self.assertEqual(res.data['schedulers']['automation-worker']['last_status'], 'SUCCESS')
+
+    @override_settings(AUTOMATION_WORKER_INTERVAL_SECONDS=1)
+    def test_reports_old_heartbeat_as_stale(self):
+        call_command('record_scheduler_heartbeat', 'automation-worker', 'SUCCESS')
+        time.sleep(1.1 * 5)  # older than interval(1s) * 5x staleness margin
+        res = self.client.get('/api/v1/health/monitoring/')
+        self.assertTrue(res.data['schedulers']['automation-worker']['stale'])
+
+    def test_reports_missing_backup_dir_as_stale(self):
+        with override_settings(BACKUP_DIR='/nonexistent/rastichat-backups'):
+            res = self.client.get('/api/v1/health/monitoring/')
+        self.assertFalse(res.data['backup']['found'])
+        self.assertTrue(res.data['backup']['stale'])
+
+    def test_reports_fresh_backup_file(self):
+        backup_dir = '/tmp/rastichat-test-backups'
+        os.makedirs(backup_dir, exist_ok=True)
+        try:
+            with open(os.path.join(backup_dir, 'rastichat-db-20260101-000000.sql.gz'), 'wb') as f:
+                f.write(b'fake')
+            with override_settings(BACKUP_DIR=backup_dir):
+                res = self.client.get('/api/v1/health/monitoring/')
+            self.assertTrue(res.data['backup']['found'])
+            self.assertFalse(res.data['backup']['stale'])
+        finally:
+            import shutil
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+    def test_disk_usage_reported(self):
+        res = self.client.get('/api/v1/health/monitoring/')
+        self.assertIn('percent_used', res.data['disk'])

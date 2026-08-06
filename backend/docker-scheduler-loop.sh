@@ -32,8 +32,20 @@ trap term_handler TERM INT
 echo "[$(date -Iseconds)] Starting scheduler loop: ${SUBCOMMAND} every ${INTERVAL}s"
 
 while [ "$shutting_down" -eq 0 ]; do
-  /app/docker-entrypoint.sh "$SUBCOMMAND" || echo "[$(date -Iseconds)] ${SUBCOMMAND} run failed (see above) — will retry next cycle"
+  if /app/docker-entrypoint.sh "$SUBCOMMAND"; then
+    cycle_status=SUCCESS
+  else
+    cycle_status=FAILURE
+    echo "[$(date -Iseconds)] ${SUBCOMMAND} run failed (see above) — will retry next cycle"
+  fi
   date +%s > "$HEARTBEAT_FILE" || true
+  # DB-backed heartbeat (in addition to the local file above, which is
+  # only what this container's own Docker HEALTHCHECK can see) — lets
+  # common.views.SchedulerStatusView answer "when did this scheduler last
+  # run" for external monitoring. Failure to record it is logged, never
+  # fatal to the loop itself.
+  /app/docker-entrypoint.sh manage record_scheduler_heartbeat "$SUBCOMMAND" "$cycle_status" \
+    || echo "[$(date -Iseconds)] Failed to record DB heartbeat for ${SUBCOMMAND} (non-fatal)"
   # Backgrounding + wait (rather than a plain `sleep`) so the TERM/INT trap
   # above interrupts the wait immediately instead of only being handled
   # after the full interval elapses.

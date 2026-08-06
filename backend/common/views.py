@@ -1,9 +1,15 @@
+import os
+import shutil
+
 import redis as redis_client
 from django.conf import settings
 from django.db import connections
 from django.db.migrations.executor import MigrationExecutor
+from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from common.models import SchedulerHeartbeat
 
 
 def _check_database():
@@ -86,6 +92,80 @@ class ReadinessView(APIView):
             },
         }
         return Response(body, status=200 if ready else 503)
+
+
+_EXPECTED_SCHEDULER_INTERVALS = {
+    'automation-worker': lambda: settings.AUTOMATION_WORKER_INTERVAL_SECONDS,
+    'sla-worker': lambda: settings.SLA_WORKER_INTERVAL_SECONDS,
+}
+
+
+def _scheduler_status():
+    now = timezone.now()
+    rows = {h.name: h for h in SchedulerHeartbeat.objects.all()}
+    result = {}
+    for name, interval_fn in _EXPECTED_SCHEDULER_INTERVALS.items():
+        row = rows.get(name)
+        if row is None:
+            result[name] = {'seen': False, 'stale': True}
+            continue
+        age_seconds = (now - row.last_run_at).total_seconds()
+        # Same 5x-interval staleness margin as the scheduler's own Docker
+        # HEALTHCHECK (see docker-compose.staging.yml) — kept consistent
+        # rather than picking a second, independent threshold here.
+        stale = age_seconds > interval_fn() * 5
+        result[name] = {
+            'seen': True, 'stale': stale, 'last_status': row.status,
+            'last_run_at': row.last_run_at.isoformat(), 'age_seconds': int(age_seconds),
+        }
+    return result
+
+
+def _disk_usage():
+    try:
+        usage = shutil.disk_usage(settings.MEDIA_ROOT if os.path.isdir(settings.MEDIA_ROOT) else '/')
+        percent_used = round(usage.used / usage.total * 100, 1)
+        return {
+            'percent_used': percent_used, 'warning': percent_used >= settings.DISK_USAGE_WARNING_PERCENT,
+            'free_bytes': usage.free,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {'error': str(exc)[:200]}
+
+
+def _backup_freshness():
+    backup_dir = settings.BACKUP_DIR
+    if not os.path.isdir(backup_dir):
+        return {'found': False, 'stale': True, 'detail': f'{backup_dir} does not exist yet'}
+    candidates = [
+        os.path.join(backup_dir, f) for f in os.listdir(backup_dir)
+        if f.startswith('rastichat-db-') and f.endswith('.sql.gz')
+    ]
+    if not candidates:
+        return {'found': False, 'stale': True, 'detail': 'no backup files found'}
+    newest = max(candidates, key=os.path.getmtime)
+    age_hours = (timezone.now().timestamp() - os.path.getmtime(newest)) / 3600
+    return {
+        'found': True, 'stale': age_hours > settings.BACKUP_MAX_AGE_HOURS,
+        'newest_file': os.path.basename(newest), 'age_hours': round(age_hours, 1),
+    }
+
+
+class MonitoringView(APIView):
+    """Operational visibility — deliberately separate from Liveness/
+    Readiness (which gate traffic routing): a stale backup or a scheduler
+    that hasn't run recently shouldn't make the app start failing user
+    requests, but it absolutely should be visible to whatever's polling
+    this for alerting. See docs/runbooks/MONITORING_RUNBOOK.md.
+    """
+    permission_classes = []
+
+    def get(self, request):
+        return Response({
+            'schedulers': _scheduler_status(),
+            'disk': _disk_usage(),
+            'backup': _backup_freshness(),
+        })
 
 
 class HealthCheckView(APIView):
