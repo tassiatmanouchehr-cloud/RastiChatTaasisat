@@ -22,10 +22,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 VALID_STAGING_ENV = {
     'ENVIRONMENT': 'staging',
     'DEBUG': '0',
-    # 64 random-looking characters — comfortably past security.W009's
-    # 50-character/low-entropy threshold, unlike a short or repetitive
-    # fixed string a CI config might otherwise pick by accident.
-    'DJANGO_SECRET_KEY': 'Xk9mQ2vN8pL4wR7tY3jH6bC1fD5gZ0aS9eU2iO8xV4nM7qW1rT6',
+    # Obviously-fake but still long/varied enough (67 chars, 19 unique) to
+    # clear security.W009's threshold, unlike a short or repetitive fixed
+    # string a CI config might otherwise pick by accident. Deliberately
+    # NOT random-looking (a real generated secret would be) so a secret
+    # scanner reading this file doesn't mistake a test fixture for a real
+    # credential.
+    'DJANGO_SECRET_KEY': 'this-is-a-fake-test-only-secret-key-value-not-a-real-credential-000',  # gitleaks:allow
     'ALLOWED_HOSTS': 'chat-staging.example.com',
     'CSRF_TRUSTED_ORIGINS': 'https://chat-staging.example.com',
     'CORS_ALLOWED_ORIGINS': 'https://chat-staging.example.com',
