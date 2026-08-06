@@ -117,6 +117,13 @@ jobs:
         working-directory: apps/operator-dashboard
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history — the lint baseline gate diffs against the PR's
+          # base branch to decide which files must be fully lint-clean
+          # (touched by this PR) vs which pre-existing errors are still
+          # allowed (untouched legacy files); a shallow clone can't compute
+          # that diff.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -124,7 +131,10 @@ jobs:
           cache-dependency-path: apps/operator-dashboard/package-lock.json
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run lint
+      - name: eslint (informational — literal result, see lint:baseline for the actual gate)
+        run: npm run lint || true
+      - name: lint baseline/delta gate (blocking — fails on any new error, or any error in a file this PR touched)
+        run: npm run lint:baseline
       - run: npm run test -- --run
       - run: npm run build
       - name: npm audit (informational — remaining findings are dev-tooling-only)
@@ -146,6 +156,8 @@ jobs:
         working-directory: apps/platform-dashboard
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -153,7 +165,10 @@ jobs:
           cache-dependency-path: apps/platform-dashboard/package-lock.json
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run lint
+      - name: eslint (informational — literal result, see lint:baseline for the actual gate)
+        run: npm run lint || true
+      - name: lint baseline/delta gate (blocking — fails on any new error, or any error in a file this PR touched)
+        run: npm run lint:baseline
       - run: npm run test -- --run
       - run: npm run build
       - name: npm audit (informational — remaining findings are dev-tooling-only)

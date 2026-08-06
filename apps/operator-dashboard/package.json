@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "lint:baseline": "node ../../scripts/lint-baseline-check.mjs",
+    "lint:baseline:update": "node ../../scripts/lint-baseline-check.mjs --update-baseline",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
