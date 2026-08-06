@@ -506,3 +506,203 @@ export const cancelScheduledAction = async (id: string) => {
     if (!res.ok) throw new Error('Failed to cancel scheduled action');
     return res.json();
 };
+
+// --- Knowledge Base ---
+
+export const fetchKBCategories = async (workspaceId?: string) => {
+    const qs = workspaceId ? `?workspace=${workspaceId}` : '';
+    const res = await fetch(`${API_BASE}/kb/categories/${qs}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch categories');
+    const data = await res.json();
+    return data.results ?? data;
+};
+
+export const createKBCategory = async (payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/kb/categories/`, authedJson('POST', payload));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || JSON.stringify(body)); }
+    return res.json();
+};
+
+export const updateKBCategory = async (id: string, payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/kb/categories/${id}/`, authedJson('PATCH', payload));
+    if (!res.ok) throw new Error('Failed to update category');
+    return res.json();
+};
+
+export const deleteKBCategory = async (id: string) => {
+    const res = await fetch(`${API_BASE}/kb/categories/${id}/`, authedJson('DELETE'));
+    if (!res.ok) throw new Error('Failed to delete category');
+};
+
+export const fetchKBArticles = async (params?: { q?: string; status?: string; category?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set('q', params.q);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.category) qs.set('category', params.category);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await fetch(`${API_BASE}/kb/articles/${suffix}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch articles');
+    const data = await res.json();
+    return data.results ?? data;
+};
+
+export const fetchKBArticle = async (id: string) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch article');
+    return res.json();
+};
+
+export const createKBArticle = async (payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/kb/articles/`, authedJson('POST', payload));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || JSON.stringify(body)); }
+    return res.json();
+};
+
+export const updateKBArticle = async (id: string, payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/`, authedJson('PATCH', payload));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || JSON.stringify(body)); }
+    return res.json();
+};
+
+export const publishKBArticle = async (id: string, revisionNumber?: number) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/publish/`, authedJson('POST', revisionNumber ? { revision_number: revisionNumber } : {}));
+    if (!res.ok) throw new Error('Failed to publish article');
+    return res.json();
+};
+
+export const archiveKBArticle = async (id: string) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/archive/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to archive article');
+    return res.json();
+};
+
+export const duplicateKBArticle = async (id: string) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/duplicate/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to duplicate article');
+    return res.json();
+};
+
+export const fetchKBArticleRevisions = async (id: string) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/revisions/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch revisions');
+    return res.json();
+};
+
+export const restoreKBArticleRevision = async (id: string, revisionNumber: number) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/revisions/${revisionNumber}/restore/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to restore revision');
+    return res.json();
+};
+
+export const shareKBArticle = async (id: string, conversationId: string, clientId: string) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/share/`, authedJson('POST', {
+        conversation_id: conversationId, client_message_id: clientId, base_url: typeof window !== 'undefined' ? window.location.origin : '',
+    }));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || 'Failed to share article'); }
+    return res.json();
+};
+
+export const fetchKBFeedbackSummary = async (id: string) => {
+    const res = await fetch(`${API_BASE}/kb/articles/${id}/feedback-summary/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch feedback summary');
+    return res.json();
+};
+
+// --- Macros ---
+
+export const fetchMacros = async (params?: { workspace?: string; is_active?: boolean; category?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.workspace) qs.set('workspace', params.workspace);
+    if (params?.is_active !== undefined) qs.set('is_active', String(params.is_active));
+    if (params?.category) qs.set('category', params.category);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await fetch(`${API_BASE}/macros/${suffix}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch macros');
+    const data = await res.json();
+    return data.results ?? data;
+};
+
+export const fetchMacro = async (id: string) => {
+    const res = await fetch(`${API_BASE}/macros/${id}/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch macro');
+    return res.json();
+};
+
+export const createMacro = async (payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/macros/`, authedJson('POST', payload));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || JSON.stringify(body)); }
+    return res.json();
+};
+
+export const updateMacro = async (id: string, payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/macros/${id}/`, authedJson('PATCH', payload));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || JSON.stringify(body)); }
+    return res.json();
+};
+
+export const deleteMacro = async (id: string) => {
+    const res = await fetch(`${API_BASE}/macros/${id}/`, authedJson('DELETE'));
+    if (!res.ok) throw new Error('Failed to delete macro');
+};
+
+export const activateMacro = async (id: string) => {
+    const res = await fetch(`${API_BASE}/macros/${id}/activate/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to activate macro');
+    return res.json();
+};
+
+export const deactivateMacro = async (id: string) => {
+    const res = await fetch(`${API_BASE}/macros/${id}/deactivate/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to deactivate macro');
+    return res.json();
+};
+
+export const duplicateMacro = async (id: string) => {
+    const res = await fetch(`${API_BASE}/macros/${id}/duplicate/`, authedJson('POST'));
+    if (!res.ok) throw new Error('Failed to duplicate macro');
+    return res.json();
+};
+
+export const previewMacro = async (id: string, conversationId: string) => {
+    const res = await fetch(`${API_BASE}/macros/${id}/preview/`, authedJson('POST', { conversation_id: conversationId }));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || 'Failed to preview macro'); }
+    return res.json();
+};
+
+export const executeMacro = async (id: string, conversationId: string, idempotencyKey: string) => {
+    const res = await fetch(`${API_BASE}/macros/${id}/execute/`, authedJson('POST', {
+        conversation_id: conversationId, idempotency_key: idempotencyKey,
+    }));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || 'Failed to execute macro'); }
+    return res.json();
+};
+
+export const fetchMacroRegistry = async () => {
+    const res = await fetch(`${API_BASE}/macros/registry/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch macro registry');
+    return res.json();
+};
+
+export const fetchMacroExecutionHistory = async (params?: { workspace?: string; macro?: string; conversation?: string; status?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.workspace) qs.set('workspace', params.workspace);
+    if (params?.macro) qs.set('macro', params.macro);
+    if (params?.conversation) qs.set('conversation', params.conversation);
+    if (params?.status) qs.set('status', params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await fetch(`${API_BASE}/macros/execution-history/${suffix}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch macro execution history');
+    return res.json();
+};
+
+export const fetchMacroExecution = async (id: string) => {
+    const res = await fetch(`${API_BASE}/macros/executions/${id}/`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!res.ok) throw new Error('Failed to fetch macro execution');
+    return res.json();
+};
+
+export const retryMacroExecution = async (id: string) => {
+    const res = await fetch(`${API_BASE}/macros/executions/${id}/`, authedJson('POST'));
+    if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || 'Failed to retry execution'); }
+    return res.json();
+};

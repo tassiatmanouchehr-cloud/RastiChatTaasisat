@@ -37,6 +37,8 @@ INSTALLED_APPS = [
     'collaboration',
     'notifications',
     'automations',
+    'knowledge_base',
+    'macros',
 ]
 
 MIDDLEWARE = [

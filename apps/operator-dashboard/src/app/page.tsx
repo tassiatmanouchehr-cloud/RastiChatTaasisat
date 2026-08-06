@@ -11,6 +11,8 @@ import {
     fetchAssignmentHistory, createInternalNote, fetchQuickReplies, applyQuickReply,
     fetchNotifications, fetchUnreadNotificationCount, markNotificationRead, markAllNotificationsRead,
     connectNotificationsWebSocket,
+    fetchKBArticles, shareKBArticle,
+    fetchMacros, previewMacro, executeMacro,
 } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -55,7 +57,14 @@ interface MessageMetadata {
     caption?: string; duration?: string | number; product_id?: string; brand?: string; name?: string;
     price?: string | number; old_price?: string | number | null; rating?: string | number;
     reviews_count?: number; image?: string;
+    article?: { article_id: string; title: string; excerpt: string; category: string; url: string; image_url?: string };
 }
+interface KBArticleSummary { id: string; title: string; excerpt: string; status: string; visibility: string; }
+interface MacroSummary { id: string; name: string; category: string; description: string; is_active: boolean; }
+interface MacroPreviewAction { type: string; preview?: string; error?: string; article_title?: string | null; tag_name?: string | null; team_name?: string | null; agent_name?: string | null; }
+interface MacroPreviewResult { macro_id: string; macro_name: string; actions: MacroPreviewAction[]; }
+interface MacroActionExecutionResult { id: string; action_index: number; action_type: string; status: string; error_summary: string; }
+interface MacroExecutionResult { id: string; status: string; action_executions: MacroActionExecutionResult[]; }
 interface Message {
     id: string; sender_type: string; content: string; message_type: string; metadata: MessageMetadata;
     attachment_url: string | null; client_message_id: string; created_at: string; seen: boolean;
@@ -72,6 +81,9 @@ type WsPayload =
 function genClientId() {
     return 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
+function genIdempotencyKey() {
+    return 'macro_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+}
 function nowMs() {
     return Date.now();
 }
@@ -87,6 +99,14 @@ const TABS: { key: string; label: string }[] = [
 const EMOJIS = '😀 😊 😉 😍 🤩 😎 🤔 😴 😢 😅 🙏 💪 👌 ✨ 🔥 ❤️ 💯 🎉 🎁 ⭐'.split(' ');
 
 const PRIORITY_LABEL: Record<string, string> = { LOW: 'کم', NORMAL: 'عادی', HIGH: 'بالا', URGENT: 'فوری' };
+
+const ACTION_PREVIEW_LABELS: Record<string, string> = {
+    SEND_REPLY: 'ارسال پاسخ', SEND_ARTICLE: 'ارسال مقاله', ADD_TAG: 'افزودن برچسب', REMOVE_TAG: 'حذف برچسب',
+    SET_PRIORITY: 'تنظیم اولویت', SET_STATUS: 'تنظیم وضعیت', ASSIGN_TO_AGENT: 'واگذاری به کارشناس',
+    ASSIGN_TO_TEAM: 'واگذاری به تیم', RETURN_TO_QUEUE: 'بازگشت به صف', TRANSFER_TO_TEAM: 'انتقال به تیم',
+    CREATE_INTERNAL_NOTE: 'یادداشت داخلی', REQUEST_RATING: 'درخواست امتیاز', CLOSE_CONVERSATION: 'پایان گفتگو',
+    REOPEN_CONVERSATION: 'بازگشایی گفتگو',
+};
 const PRIORITY_COLOR: Record<string, string> = {
     LOW: 'bg-gray-100 text-gray-500', NORMAL: 'bg-gray-100 text-gray-500',
     HIGH: 'bg-gold-soft text-terracotta-2', URGENT: 'bg-red-100 text-red-600',
@@ -143,6 +163,7 @@ function previewFor(m: LastMessage | null) {
         case 'PRODUCT': return '🛍️ معرفی محصول';
         case 'RATING_REQUEST': return '⭐ درخواست امتیاز';
         case 'RATING': return '⭐ امتیازدهی مشتری';
+        case 'ARTICLE': return '📚 مقاله پایگاه دانش';
         default: return m.content;
     }
 }
@@ -212,6 +233,22 @@ function MessageBubble({ msg }: { msg: Message }) {
     } else if (msg.message_type === 'RATING') {
         const r = Number(msg.metadata?.rating) || 0;
         body = <div className="rounded-2xl px-4 py-3 bg-gold-soft border border-gold-soft text-terracotta-2 text-xs">مشتری امتیاز داد: {'★'.repeat(r)}{'☆'.repeat(5 - r)}</div>;
+    } else if (msg.message_type === 'ARTICLE') {
+        const article: Partial<NonNullable<MessageMetadata['article']>> = msg.metadata?.article || {};
+        body = (
+            <div className="w-[230px] rounded-2xl overflow-hidden border border-gray-200 bg-white text-gray-800">
+                <div className="p-2.5">
+                    <div className="text-[10px] text-terracotta font-semibold">📚 {article.category || 'پایگاه دانش'}</div>
+                    <div className="text-[12.5px] font-bold leading-relaxed mt-0.5">{article.title}</div>
+                    {article.excerpt && <div className="text-[11px] text-gray-500 mt-1 line-clamp-2">{article.excerpt}</div>}
+                    {article.url && (
+                        <a href={article.url} target="_blank" rel="noreferrer" className="text-[11px] text-terracotta mt-1.5 inline-block hover:underline">
+                            مشاهده مقاله ←
+                        </a>
+                    )}
+                </div>
+            </div>
+        );
     } else if (msg.message_type === 'INTERNAL_NOTE') {
         body = (
             <div className="rounded-2xl px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap break-words max-w-md bg-yellow-50 border border-yellow-200 text-yellow-900">
@@ -388,6 +425,14 @@ export default function DashboardPage() {
     const [showProducts, setShowProducts] = useState(false);
     const [products, setProducts] = useState<Product[]>([]);
     const [productSearch, setProductSearch] = useState('');
+    const [showKB, setShowKB] = useState(false);
+    const [kbSearch, setKbSearch] = useState('');
+    const [kbResults, setKbResults] = useState<KBArticleSummary[]>([]);
+    const [showMacros, setShowMacros] = useState(false);
+    const [macroSearch, setMacroSearch] = useState('');
+    const [macroList, setMacroList] = useState<MacroSummary[]>([]);
+    const [macroPreview, setMacroPreview] = useState<{ macro: MacroSummary; result: MacroPreviewResult } | null>(null);
+    const [macroRunning, setMacroRunning] = useState(false);
     const [categoryDraft, setCategoryDraft] = useState('');
     const [recording, setRecording] = useState(false);
     const [recordDuration, setRecordDuration] = useState(0);
@@ -468,6 +513,23 @@ export default function DashboardPage() {
         }, 250);
         return () => window.clearTimeout(t);
     }, [productSearch, showProducts]);
+
+    useEffect(() => {
+        if (!showKB) return;
+        const t = window.setTimeout(() => {
+            fetchKBArticles({ q: kbSearch || undefined, status: 'PUBLISHED' }).then(setKbResults).catch(() => setKbResults([]));
+        }, 250);
+        return () => window.clearTimeout(t);
+    }, [kbSearch, showKB]);
+
+    useEffect(() => {
+        if (!showMacros) return;
+        fetchMacros({ is_active: true }).then(setMacroList).catch(() => setMacroList([]));
+    }, [showMacros]);
+
+    const filteredMacros = macroList.filter(m =>
+        !macroSearch.trim() || m.name.includes(macroSearch.trim()) || (m.category || '').includes(macroSearch.trim())
+    );
 
     const selectedConvId = useRef<string | null>(null);
 
@@ -654,6 +716,61 @@ export default function DashboardPage() {
             addIfNew(msg);
             setShowProducts(false);
         } catch { notify('error', 'ارسال محصول ناموفق بود'); }
+    };
+
+    const handleShareArticle = async (article: KBArticleSummary) => {
+        if (!selectedConv) return;
+        const clientId = genClientId();
+        try {
+            const msg = await shareKBArticle(article.id, selectedConv.id, clientId);
+            addIfNew(msg);
+            setShowKB(false);
+        } catch { notify('error', 'ارسال مقاله ناموفق بود'); }
+    };
+
+    const handleInsertArticleLink = (article: KBArticleSummary) => {
+        setInput(prev => (prev ? `${prev} ` : '') + `[${article.title}]`);
+        setShowKB(false);
+    };
+
+    const handleOpenMacroPreview = async (macro: MacroSummary) => {
+        if (!selectedConv) return;
+        try {
+            const result = await previewMacro(macro.id, selectedConv.id);
+            setMacroPreview({ macro, result });
+        } catch (e) { notify('error', (e as Error).message || 'پیش‌نمایش ماکرو ناموفق بود'); }
+    };
+
+    const handleConfirmMacro = async () => {
+        if (!selectedConv || !macroPreview) return;
+        setMacroRunning(true);
+        const idempotencyKey = genIdempotencyKey();
+        try {
+            const execution: MacroExecutionResult = await executeMacro(macroPreview.macro.id, selectedConv.id, idempotencyKey);
+            if (execution.status === 'SUCCEEDED') {
+                notify('success', `ماکرو «${macroPreview.macro.name}» با موفقیت اجرا شد`);
+            } else if (execution.status === 'PARTIALLY_SUCCEEDED') {
+                const failed = execution.action_executions.filter(a => a.status === 'FAILED').map(a => a.action_type).join('، ');
+                notify('error', `ماکرو به‌صورت ناقص اجرا شد — ناموفق: ${failed}`);
+            } else {
+                notify('error', 'اجرای ماکرو ناموفق بود');
+            }
+            setMacroPreview(null);
+            setShowMacros(false);
+            // Macro actions may have changed messages, priority, status, team,
+            // or assignment — refresh both, mirroring the pattern every other
+            // conversation-mutating action in this page already uses.
+            fetchMessages(selectedConv.id).then(setMessages).catch(() => {});
+            fetchConversations().then((all: Conversation[]) => {
+                setConversations(all);
+                const fresh = all.find(c => c.id === selectedConv.id);
+                if (fresh) setSelectedConv(prev => (prev ? { ...prev, ...fresh } : prev));
+            }).catch(() => {});
+        } catch (e) {
+            notify('error', (e as Error).message || 'اجرای ماکرو ناموفق بود');
+        } finally {
+            setMacroRunning(false);
+        }
     };
 
     const handleRequestRating = async () => {
@@ -843,6 +960,8 @@ export default function DashboardPage() {
                             )}
                         </div>
                         <Link href="/supervisor" className="text-xs text-gray-400 hover:text-terracotta" title="داشبورد سرپرستی">📊</Link>
+                        <Link href="/knowledge-base" className="text-xs text-gray-400 hover:text-terracotta" title="پایگاه دانش">📚</Link>
+                        <Link href="/macros" className="text-xs text-gray-400 hover:text-terracotta" title="ماکروها">⚡</Link>
                         <Link href="/automations" className="text-xs text-gray-400 hover:text-terracotta" title="اتوماسیون‌ها">⚙️</Link>
                         <button onClick={handleLogout} className="text-xs text-gray-400 hover:text-red-500">خروج</button>
                     </div>
@@ -1094,6 +1213,73 @@ export default function DashboardPage() {
                                 </div>
                             )}
 
+                            {showKB && (
+                                <div className="absolute bottom-16 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-80 max-h-80 overflow-y-auto z-10">
+                                    <div className="text-xs font-bold text-gray-500 px-1 pb-2">جستجوی پایگاه دانش</div>
+                                    <input
+                                        value={kbSearch} onChange={(e) => setKbSearch(e.target.value)} autoFocus
+                                        placeholder="جستجو در عنوان، خلاصه و متن…"
+                                        className="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 mb-2 outline-none focus:border-terracotta"
+                                    />
+                                    {kbResults.length === 0 && <div className="text-xs text-gray-400 px-1 py-2">مقاله‌ای یافت نشد</div>}
+                                    {kbResults.map(a => (
+                                        <div key={a.id} className="p-2 rounded-lg hover:bg-gray-50">
+                                            <div className="text-xs font-semibold">{a.title}</div>
+                                            {a.excerpt && <div className="text-[11px] text-gray-400 truncate">{a.excerpt}</div>}
+                                            <div className="flex items-center gap-2 mt-1">
+                                                <button onClick={() => handleShareArticle(a)} className="text-[11px] text-terracotta hover:underline">ارسال کارت مقاله</button>
+                                                <button onClick={() => handleInsertArticleLink(a)} className="text-[11px] text-gray-500 hover:underline">درج در متن</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {showMacros && (
+                                <div className="absolute bottom-16 right-3 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-80 max-h-80 overflow-y-auto z-10">
+                                    <div className="text-xs font-bold text-gray-500 px-1 pb-2">اجرای ماکرو</div>
+                                    <input
+                                        value={macroSearch} onChange={(e) => setMacroSearch(e.target.value)} autoFocus
+                                        placeholder="جستجوی ماکرو…"
+                                        className="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 mb-2 outline-none focus:border-terracotta"
+                                    />
+                                    {filteredMacros.length === 0 && <div className="text-xs text-gray-400 px-1 py-2">ماکرویی یافت نشد</div>}
+                                    {filteredMacros.map(m => (
+                                        <button key={m.id} onClick={() => handleOpenMacroPreview(m)} className="w-full text-right p-2 rounded-lg hover:bg-gray-50">
+                                            <div className="text-xs font-semibold">{m.name}</div>
+                                            {m.category && <div className="text-[11px] text-gray-400">{m.category}</div>}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+
+                            {macroPreview && (
+                                <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-20" onClick={() => !macroRunning && setMacroPreview(null)}>
+                                    <div className="bg-white rounded-xl shadow-xl p-4 w-96 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                                        <div className="text-sm font-bold text-gray-800 mb-1">اجرای ماکرو «{macroPreview.macro.name}»</div>
+                                        <div className="text-xs text-gray-400 mb-3">پیش‌نمایش اقدامات — هنوز هیچ تغییری اعمال نشده است</div>
+                                        <div className="flex flex-col gap-2 mb-3">
+                                            {macroPreview.result.actions.map((a, i) => (
+                                                <div key={i} className="text-xs border border-gray-100 rounded-lg p-2 bg-cream/30">
+                                                    <div className="font-semibold text-gray-700">{i + 1}. {ACTION_PREVIEW_LABELS[a.type] || a.type}</div>
+                                                    {a.preview && <div className="text-gray-500 mt-0.5">{a.preview}</div>}
+                                                    {a.article_title && <div className="text-gray-500 mt-0.5">مقاله: {a.article_title}</div>}
+                                                    {a.tag_name && <div className="text-gray-500 mt-0.5">برچسب: {a.tag_name}</div>}
+                                                    {a.team_name && <div className="text-gray-500 mt-0.5">تیم: {a.team_name}</div>}
+                                                    {a.agent_name && <div className="text-gray-500 mt-0.5">کارشناس: {a.agent_name}</div>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <button onClick={handleConfirmMacro} disabled={macroRunning} className="text-sm bg-terracotta text-white rounded-lg px-4 py-2 disabled:opacity-50">
+                                                {macroRunning ? 'در حال اجرا…' : 'تأیید و اجرا'}
+                                            </button>
+                                            <button onClick={() => setMacroPreview(null)} disabled={macroRunning} className="text-sm text-gray-500 hover:underline">انصراف</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
                             {uploading && (
                                 <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] text-gray-400">
                                     <span className="w-2.5 h-2.5 rounded-full border-2 border-gray-200 border-t-terracotta animate-spin" />
@@ -1107,6 +1293,8 @@ export default function DashboardPage() {
                                     <button onClick={() => { setShowProducts(v => !v); setShowEmoji(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="معرفی محصول">🛍️</button>
                                 )}
                                 <button onClick={() => { setShowEmoji(v => !v); setShowProducts(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="ایموجی">🙂</button>
+                                <button onClick={() => { setShowKB(v => !v); setShowProducts(false); setShowEmoji(false); setShowMacros(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="جستجوی پایگاه دانش">📚</button>
+                                <button onClick={() => { setShowMacros(v => !v); setShowProducts(false); setShowEmoji(false); setShowKB(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="اجرای ماکرو">⚡</button>
                                 {!noteMode && <button onClick={() => fileInputRef.current?.click()} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white" title="پیوست عکس">📎</button>}
                                 <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAttach(f); e.target.value = ''; }} />
                                 <input type="text" value={input} onChange={(e) => handleInputChange(e.target.value)}

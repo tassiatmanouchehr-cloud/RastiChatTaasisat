@@ -26,6 +26,7 @@ interface MessageMetadata {
     rating?: string | number;
     reviews_count?: number;
     image?: string;
+    article?: { article_id: string; title: string; excerpt: string; category: string; url: string; image_url?: string };
 }
 
 interface WireMessage {
@@ -221,6 +222,14 @@ class RastiChatWidget {
                 .rasti-r-stars button { background: none; border: none; font-size: 20px; cursor: pointer; color: #ddd2c2; padding: 0; }
                 .rasti-r-stars button.on { color: #C2954A; }
                 .rasti-r-thanks { font-size: 11.5px; color: #5E8A56; font-weight: 600; margin-top: 8px; }
+                .rasti-bubble.rasti-article { padding: 0; overflow: hidden; width: 230px; background: #fff; color: #2C211A; border: 1px solid #ECDCC8; }
+                .rasti-a-img { height: 80px; background-color: #F3E8D8; background-size: cover; background-position: center; }
+                .rasti-a-body { padding: 9px 11px 11px; }
+                .rasti-a-cat { font-size: 10px; color: ${this.config.primaryColor}; font-weight: 600; }
+                .rasti-a-title { font-size: 12.5px; font-weight: 700; margin-top: 2px; line-height: 1.5; }
+                .rasti-a-excerpt { font-size: 11px; color: #A08C77; margin-top: 4px; line-height: 1.5; }
+                .rasti-a-link { display: inline-block; font-size: 11px; color: ${this.config.primaryColor}; margin-top: 6px; text-decoration: none; }
+                .rasti-a-link:hover { text-decoration: underline; }
                 #rasti-typing { align-self: flex-start; display: none; }
                 #rasti-typing .rasti-bubble { display: flex; gap: 4px; align-items: center; padding: 11px 13px; }
                 #rasti-typing span { width: 5px; height: 5px; border-radius: 50%; background: #A08C77; animation: rasti-bob 1.2s infinite; }
@@ -740,6 +749,19 @@ class RastiChatWidget {
         } else if (type === 'RATING') {
             const r = Number(data.metadata?.rating) || 0;
             inner = `<div class="rasti-bubble">شما به این گفتگو ${'★'.repeat(r)}${'☆'.repeat(5 - r)} امتیاز دادید</div>`;
+        } else if (type === 'ARTICLE') {
+            const a = data.metadata?.article;
+            const img = a?.image_url ? `<div class="rasti-a-img" style="background-image:url('${a.image_url}')"></div>` : '';
+            const link = a?.url ? `<a class="rasti-a-link" href="${a.url}" target="_blank" rel="noopener noreferrer">مشاهده مقاله ←</a>` : '';
+            inner = `<div class="rasti-bubble rasti-article">
+                ${img}
+                <div class="rasti-a-body">
+                    ${a?.category ? `<div class="rasti-a-cat">📚 ${escapeHtml(a.category)}</div>` : ''}
+                    <div class="rasti-a-title">${escapeHtml(a?.title || '')}</div>
+                    ${a?.excerpt ? `<div class="rasti-a-excerpt">${escapeHtml(a.excerpt)}</div>` : ''}
+                    ${link}
+                </div>
+            </div>`;
         } else {
             return '';
         }

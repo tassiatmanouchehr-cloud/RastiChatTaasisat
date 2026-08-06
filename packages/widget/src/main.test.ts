@@ -200,6 +200,25 @@ describe('RastiChatWidget', () => {
     expect(card.querySelector('.rasti-p-old')?.textContent).toContain('۱');
   });
 
+  it('renders an incoming Knowledge Base article card with title, excerpt and link', async () => {
+    const ws = await initWidget();
+    ws.emitMessage({
+      sender_type: 'USER', message_type: 'ARTICLE', client_message_id: 'a1', created_at: new Date().toISOString(),
+      metadata: {
+        article: {
+          article_id: 'art-1', title: 'راهنمای مرجوعی', excerpt: 'خلاصه کوتاه', category: 'مرجوعی',
+          url: 'http://localhost:8081/kb/refund-guide',
+        },
+      },
+    });
+    const card = document.querySelector('.rasti-bubble.rasti-article')!;
+    expect(card).toBeTruthy();
+    expect(card.querySelector('.rasti-a-title')?.textContent).toBe('راهنمای مرجوعی');
+    expect(card.querySelector('.rasti-a-excerpt')?.textContent).toBe('خلاصه کوتاه');
+    expect(card.querySelector('.rasti-a-cat')?.textContent).toContain('مرجوعی');
+    expect(card.querySelector('.rasti-a-link')?.getAttribute('href')).toBe('http://localhost:8081/kb/refund-guide');
+  });
+
   it('renders a rating request and submits a rating via POST', async () => {
     const ws = await initWidget();
     ws.emitMessage({ sender_type: 'USER', message_type: 'RATING_REQUEST', client_message_id: 'r1', created_at: new Date().toISOString() });
