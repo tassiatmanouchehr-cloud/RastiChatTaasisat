@@ -28,6 +28,12 @@ FROM python:3.11-slim AS runtime
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 
+# Lets `docker inspect`/scripts/staging/status.sh and rollback.sh answer
+# "which commit is this image actually running" without needing a
+# separate side-channel — scripts/staging/deploy.sh passes the real value.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision="${GIT_SHA}"
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq5 curl \
     && rm -rf /var/lib/apt/lists/* \
