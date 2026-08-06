@@ -73,6 +73,12 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.prod
+      args:
+        # Must match whatever scripts/staging/deploy.sh chowns
+        # MEDIA_HOST_PATH/STATIC_HOST_PATH to on the host — same env var,
+        # same default, on both sides (see deploy.sh's "Fix permissions" step).
+        RASTICHAT_UID: ${RASTICHAT_UID:-10001}
+        RASTICHAT_GID: ${RASTICHAT_GID:-10001}
     image: rastichat-backend:${IMAGE_TAG:-staging}
     restart: unless-stopped
     command: ["web"]

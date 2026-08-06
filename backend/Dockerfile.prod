@@ -34,10 +34,22 @@ WORKDIR /app
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
 
+# Fixed, deterministic UID/GID (not whatever `useradd --system` happens to
+# auto-assign) — MEDIA_HOST_PATH/STATIC_HOST_PATH are host bind mounts, so
+# the container's user must match ownership scripts/staging/deploy.sh sets
+# up on the host side (see its "Fix media/static permissions" step) or every
+# write to /app/media (image/voice/KB-attachment upload) fails with EACCES.
+# Overridable via --build-arg for a host where 10001 is already taken; the
+# default here and the default in .env.staging.example/.env.production.example
+# (RASTICHAT_UID/RASTICHAT_GID) must be kept in sync.
+ARG RASTICHAT_UID=10001
+ARG RASTICHAT_GID=10001
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq5 curl \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system rastichat && useradd --system --gid rastichat --home /app --shell /usr/sbin/nologin rastichat
+    && groupadd --system --gid "${RASTICHAT_GID}" rastichat \
+    && useradd --system --uid "${RASTICHAT_UID}" --gid rastichat --home /app --shell /usr/sbin/nologin rastichat
 
 COPY --from=builder /opt/venv /opt/venv
 COPY . /app
