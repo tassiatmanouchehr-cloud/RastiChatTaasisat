@@ -13,5 +13,9 @@ dump.rdb
 backups/
 scripts/staging/backups/
 
+# Generated staging demo credentials (see
+# common/management/commands/seed_staging_data.py) — never committed.
+staging-credentials.txt
+
 # Editor/OS noise.
 .DS_Store
