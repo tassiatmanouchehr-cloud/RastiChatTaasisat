@@ -1,6 +1,7 @@
 import json
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
+from django.conf import settings
 from rest_framework_simplejwt.tokens import AccessToken
 from django.contrib.auth import get_user_model
 from .models import Conversation, Message, MessageReceipt
@@ -9,6 +10,7 @@ from visitors.models import VisitorSession
 from workspaces.models import WorkspaceMembership
 from platforms.models import PlatformMembership
 from accounts.presence import touch_presence
+from common.ws_throttling import is_rate_limited
 
 User = get_user_model()
 
@@ -107,6 +109,19 @@ class WidgetChatConsumer(BaseChatConsumer):
             return
         msg_text = content.get('message', '').strip()
         if not msg_text or len(msg_text) > 5000: return
+        # DRF's `widget_message`/`widget_start` throttle scopes only ever
+        # run on the REST cycle — a client that skips those endpoints and
+        # sends straight over this socket would otherwise be unbounded.
+        # Keyed on the visitor session token (established once at connect(),
+        # cannot be forged mid-socket) rather than IP, so it isn't defeated
+        # by shared/rotating IPs behind NAT or a reverse proxy.
+        limited = await is_rate_limited(
+            'widget_ws_message', self.session_token,
+            settings.WIDGET_WS_MESSAGE_RATE_LIMIT, settings.WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS,
+        )
+        if limited:
+            await self.send_json({'type': 'rate_limited', 'retry_after': settings.WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS})
+            return
         msg = await self._save_visitor_message(content.get('client_message_id'), msg_text)
         if not msg: return
         await self.channel_layer.group_send(self.group_name, {'type': 'chat.message', 'message': {

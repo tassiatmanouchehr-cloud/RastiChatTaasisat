@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from common.mixins import WorkspaceScopedQuerysetMixin
@@ -265,6 +266,8 @@ class PublicKnowledgeBaseArticleListView(APIView):
 class PublicKnowledgeBaseSearchView(APIView):
     permission_classes = []
     pagination_class = StandardPagination
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'kb_search'
 
     def get(self, request):
         workspace = _resolve_public_workspace(request)
@@ -328,6 +331,8 @@ class PublicKnowledgeBaseFeedbackView(APIView):
     per article can be enforced deterministically.
     """
     permission_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'kb_feedback'
 
     def post(self, request, slug):
         article = _get_public_article_or_404(request, slug)

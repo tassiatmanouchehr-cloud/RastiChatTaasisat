@@ -355,6 +355,8 @@ class CustomerConversationViewSet(viewsets.ModelViewSet):
 
 class StartCustomerChatView(APIView):
     permission_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'widget_start'
     def post(self, request):
         from django.core.exceptions import ValidationError
         from django.db import transaction
@@ -512,6 +514,8 @@ class WidgetUploadView(APIView):
 
 class WidgetRateConversationView(APIView):
     permission_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'widget_rating'
     def post(self, request, conv_id):
         try:
             conv = _get_visitor_conversation(request.data.get('session_token'), conv_id)
