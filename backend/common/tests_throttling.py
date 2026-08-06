@@ -10,14 +10,17 @@ class attribute DRF itself populates from `REST_FRAMEWORK.DEFAULT_THROTTLE_RATES
 at import time — to re-enable a real, tight rate for just the scope under
 test, proving the throttle_scope wiring on the view is genuinely load-bearing.
 """
+import uuid
 from unittest.mock import patch
 
+from channels.testing import WebsocketCommunicator
 from django.core.cache import cache
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 from rest_framework.test import APIClient
 from rest_framework.throttling import ScopedRateThrottle
 
 from accounts.models import User
+from config.asgi import application
 from knowledge_base import services as kb_services
 from knowledge_base.tests_base import KBTestMixin
 from macros.models import Macro
@@ -101,3 +104,44 @@ class MacroExecutionThrottleTests(ThrottleTestMixin, KBTestMixin, TransactionTes
             self.assertEqual(res.status_code, 200)
             res = self.client.post(url, {'conversation_id': str(conv.id), 'idempotency_key': 'k2'}, format='json')
             self.assertEqual(res.status_code, 429)
+
+
+class WidgetWebSocketMessageThrottleTests(KBTestMixin, TransactionTestCase):
+    """A REST ScopedRateThrottle never runs on a Channels consumer — this
+    proves the SEPARATE Redis-backed limiter in common/ws_throttling.py
+    (wired into WidgetChatConsumer.receive_json) actually trips, closing
+    the "no easy bypass through WebSocket" requirement DRF throttles alone
+    can't cover. Uses real Redis (already required for Channels itself to
+    work at all in tests), not the process-global Django cache the REST
+    throttle tests above avoid — a distinct window per test run key
+    (uuid4 session token) keeps this test isolated from any other run.
+    """
+
+    @override_settings(WIDGET_WS_MESSAGE_RATE_LIMIT=2, WIDGET_WS_MESSAGE_RATE_WINDOW_SECONDS=60)
+    async def test_visitor_message_send_throttles_after_limit(self):
+        from channels.db import database_sync_to_async
+
+        @database_sync_to_async
+        def make_fixtures():
+            ws = self.make_workspace()
+            project = self.make_project(ws)
+            visitor = self.make_visitor(project)
+            session = self.make_visitor_session(visitor)
+            conv = self.make_conversation(ws, project, visitor)
+            return session, conv
+
+        session, conv = await make_fixtures()
+        communicator = WebsocketCommunicator(application, f"/ws/widget/{session.token}/{conv.id}/")
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        for i in range(2):
+            await communicator.send_json_to({'message': f'hello {i}', 'client_message_id': str(uuid.uuid4())})
+            event = await communicator.receive_json_from()
+            self.assertEqual(event['type'], 'chat.message')
+
+        await communicator.send_json_to({'message': 'one too many', 'client_message_id': str(uuid.uuid4())})
+        event = await communicator.receive_json_from()
+        self.assertEqual(event['type'], 'rate_limited')
+
+        await communicator.disconnect()
