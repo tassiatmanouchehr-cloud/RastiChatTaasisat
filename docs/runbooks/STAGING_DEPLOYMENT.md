@@ -131,6 +131,56 @@ node scripts/staging/load-baseline.mjs
 
 See `docs/runbooks/MONITORING_RUNBOOK.md` for what to capture alongside it.
 
+## Compose project name
+
+`docker-compose.staging.yml` pins its project name to
+`${COMPOSE_PROJECT_NAME:-rastichat-staging}` rather than letting Compose
+derive one from the checkout directory's basename — this is what keeps the
+named volumes (`postgres_data`, `redis_data`) stable across redeploys
+regardless of what the repo happens to be checked out into. `.env.staging`/
+`.env.production` set distinct values (`rastichat-staging` /
+`rastichat-production`) so the two can never collide if ever run on the
+same host.
+
+**Migrating an already-running installation** (deployed before this pin
+existed, so its volumes live under whatever name Compose derived from the
+checkout directory — e.g. `app` for a clone at `/opt/rastichat/app`):
+
+```bash
+# 1. Confirm the OLD project's volume names (note the exact names — you'll
+#    need them below):
+docker volume ls | grep -E 'postgres_data|redis_data'
+
+# 2. Take a fresh backup first — this doesn't touch data, but confirm you
+#    have a clean rollback point regardless:
+scripts/staging/backup.sh .env.staging
+
+# 3. Stop the old stack WITHOUT -v (never remove the volumes themselves):
+docker compose -f docker-compose.staging.yml --env-file .env.staging down
+
+# 4. Rename the volumes to match the new pinned project name (Docker has
+#    no built-in "rename volume" — this creates a new volume and copies
+#    the data across via a throwaway container):
+for v in postgres_data redis_data; do
+  docker volume create "rastichat-staging_${v}"
+  docker run --rm \
+    -v "<old-project-name>_${v}:/from" \
+    -v "rastichat-staging_${v}:/to" \
+    alpine sh -c "cd /from && cp -a . /to"
+done
+
+# 5. Bring the stack back up under the new pinned name and verify:
+scripts/staging/deploy.sh .env.staging
+scripts/staging/status.sh .env.staging
+
+# 6. Once confirmed healthy, remove the old (now-unused) volumes:
+docker volume rm <old-project-name>_postgres_data <old-project-name>_redis_data
+```
+
+`media_data`/`static_data` are bind mounts to `MEDIA_HOST_PATH`/
+`STATIC_HOST_PATH` (real host directories, not Docker-managed volumes) —
+those are unaffected by a project-name change and need no migration step.
+
 ## Known limitations
 
 - CORS/WebSocket-origin allowlists are explicit domain lists

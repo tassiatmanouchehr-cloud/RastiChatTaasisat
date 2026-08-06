@@ -14,6 +14,16 @@
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging build
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 #   docker compose -f docker-compose.staging.yml --env-file .env.staging ps
+#
+# Pinned project name (rather than letting Compose derive one from the
+# checkout directory's basename) — named-volume identity (postgres_data,
+# redis_data) must stay stable across redeploys regardless of what the repo
+# happens to be checked out into. Override via COMPOSE_PROJECT_NAME in the
+# env file so staging and production (this same file, different env file)
+# never collide if ever run on the same host. See
+# docs/runbooks/STAGING_DEPLOYMENT.md "Compose project name" for the
+# one-time migration this implies for an already-running installation.
+name: ${COMPOSE_PROJECT_NAME:-rastichat-staging}
 
 services:
   db:
