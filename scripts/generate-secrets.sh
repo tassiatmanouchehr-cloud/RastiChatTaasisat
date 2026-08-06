@@ -15,3 +15,4 @@ echo
 echo "DJANGO_SECRET_KEY=$(rand 64 50)"
 echo "DB_PASSWORD=$(rand 32 32)"
 echo "REDIS_PASSWORD=$(rand 32 32)"
+echo "MONITORING_TOKEN=$(rand 32 40)"

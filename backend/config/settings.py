@@ -325,6 +325,21 @@ BACKUP_DIR = os.environ.get('BACKUP_DIR', str(BASE_DIR / 'backups'))
 BACKUP_MAX_AGE_HOURS = int(os.environ.get('BACKUP_MAX_AGE_HOURS', 26))
 DISK_USAGE_WARNING_PERCENT = int(os.environ.get('DISK_USAGE_WARNING_PERCENT', 85))
 
+# Shared-secret header (X-Monitoring-Token) common.views.MonitoringView
+# requires before returning anything — disk usage, backup filenames/ages,
+# and scheduler heartbeat status are operational details, not something an
+# anonymous internet caller should see (unlike LivenessView/ReadinessView,
+# which orchestrators/load balancers poll unauthenticated by design and
+# stay that way). Required in staging/production, same fail-fast pattern
+# as DJANGO_SECRET_KEY — generate with scripts/generate-secrets.sh.
+MONITORING_TOKEN = os.environ.get('MONITORING_TOKEN')
+if IS_PRODUCTION_LIKE and not MONITORING_TOKEN:
+    raise ImproperlyConfigured(
+        'MONITORING_TOKEN must be set when ENVIRONMENT is staging or production — '
+        '/api/v1/health/monitoring/ would otherwise be unauthenticated. '
+        'Generate one with scripts/generate-secrets.sh.'
+    )
+
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
 

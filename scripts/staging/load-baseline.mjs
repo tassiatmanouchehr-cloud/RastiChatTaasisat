@@ -26,6 +26,11 @@ const UPLOAD_FRACTION = parseFloat(process.env.UPLOAD_FRACTION || '0.2'); // 20%
 const OPERATOR_CREDENTIALS = (process.env.OPERATOR_CREDENTIALS || '')
   .split(',').map(s => s.trim()).filter(Boolean)
   .map(pair => { const [email, password] = pair.split(':'); return { email, password }; });
+// Optional — /api/v1/health/monitoring/ requires this header in staging/
+// production (see common.views.MonitoringView); without it pollMonitoring()
+// below just gets a 401 and silently skips the disk/scheduler/backup
+// numbers it reports, same as before this existed.
+const MONITORING_TOKEN = process.env.MONITORING_TOKEN || '';
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -166,7 +171,9 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function pollMonitoring() {
   try {
-    const res = await fetch(`${BASE_URL}/api/v1/health/monitoring/`);
+    const res = await fetch(`${BASE_URL}/api/v1/health/monitoring/`, {
+      headers: MONITORING_TOKEN ? { 'X-Monitoring-Token': MONITORING_TOKEN } : {},
+    });
     if (res.ok) return res.json();
   } catch { /* best-effort only */ }
   return null;

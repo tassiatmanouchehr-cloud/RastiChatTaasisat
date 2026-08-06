@@ -29,3 +29,10 @@ export const OWNER_EMAIL = required('SMOKE_OWNER_EMAIL');
 export const OWNER_PASSWORD = required('SMOKE_OWNER_PASSWORD');
 export const OPERATOR_EMAIL = required('SMOKE_OPERATOR_EMAIL');
 export const OPERATOR_PASSWORD = required('SMOKE_OPERATOR_PASSWORD');
+
+// Optional — /api/v1/health/monitoring/ requires this (see
+// common.views.MonitoringView). Not required to run the suite: without it,
+// the monitoring-endpoint assertion only checks for a non-5xx response
+// (a 401 is expected and correct in that case), same as before this
+// existed.
+export const MONITORING_TOKEN = process.env.SMOKE_MONITORING_TOKEN || '';

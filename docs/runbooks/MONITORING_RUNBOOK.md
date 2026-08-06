@@ -6,14 +6,27 @@
 |---|---|---|
 | `GET /api/v1/health/live/` | Liveness — is the process alive at all. | Never fails from a DB/Redis outage — only a genuinely wedged process. Use for container-restart decisions. |
 | `GET /api/v1/health/ready/` | Readiness — should traffic route here. | DB unreachable, Redis unreachable, or unapplied migrations exist. Returns 503, not 200, in any of those cases. Use for load-balancer/proxy routing decisions. |
-| `GET /api/v1/health/monitoring/` | Operational visibility (not a traffic gate). | Reports scheduler staleness, disk usage, backup freshness — see below. |
+| `GET /api/v1/health/monitoring/` | Operational visibility (not a traffic gate). | Reports scheduler staleness, disk usage, backup freshness — see below. **Requires `X-Monitoring-Token: $MONITORING_TOKEN`** (a bare 401, no detail, without it — disk/backup/scheduler info is not for anonymous callers). |
 | `GET /api/v1/health/` | Legacy, backward-compatible shape (`{"status": "healthy"/"unhealthy", ...}`). | Same DB/Redis checks as readiness, without migration-state detail. |
+
+`/health/ready/`'s `error` detail strings (raw DB/Redis exception text) are
+also only ever included for a caller presenting the same
+`X-Monitoring-Token` header — an anonymous caller (a load balancer, say)
+still sees `up: true/false`, just not *why* it's false.
 
 ```bash
 curl -fsS https://chat-staging.rastisi.ir/api/v1/health/ready/ | python3 -m json.tool
+# With detail, as an authorized monitoring caller:
+curl -fsS -H "X-Monitoring-Token: $MONITORING_TOKEN" \
+  https://chat-staging.rastisi.ir/api/v1/health/ready/ | python3 -m json.tool
 ```
 
 ## Reading `/health/monitoring/`
+
+```bash
+curl -fsS -H "X-Monitoring-Token: $MONITORING_TOKEN" \
+  https://chat-staging.rastisi.ir/api/v1/health/monitoring/ | python3 -m json.tool
+```
 
 ```json
 {

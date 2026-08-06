@@ -63,3 +63,63 @@ class MonitoringViewTests(TestCase):
     def test_disk_usage_reported(self):
         res = self.client.get('/api/v1/health/monitoring/')
         self.assertIn('percent_used', res.data['disk'])
+
+
+class MonitoringViewAuthTests(TestCase):
+    """MONITORING_TOKEN is unset under the default test settings (ENVIRONMENT
+    defaults to 'development', which doesn't require it) — the tests above
+    exercise that dev-permissive path. These exercise the actual gate by
+    explicitly configuring a token, proving an unauthenticated/wrong-token
+    caller is rejected with no operational detail, and a correctly
+    authenticated one still gets the full payload.
+    """
+
+    def test_missing_token_is_rejected_with_no_detail(self):
+        with override_settings(MONITORING_TOKEN='the-real-token'):
+            res = self.client.get('/api/v1/health/monitoring/')
+        self.assertEqual(res.status_code, 401)
+        self.assertNotIn('schedulers', res.data)
+        self.assertNotIn('disk', res.data)
+        self.assertNotIn('backup', res.data)
+
+    def test_wrong_token_is_rejected(self):
+        with override_settings(MONITORING_TOKEN='the-real-token'):
+            res = self.client.get('/api/v1/health/monitoring/', HTTP_X_MONITORING_TOKEN='not-it')
+        self.assertEqual(res.status_code, 401)
+
+    def test_correct_token_is_accepted(self):
+        with override_settings(MONITORING_TOKEN='the-real-token'):
+            res = self.client.get('/api/v1/health/monitoring/', HTTP_X_MONITORING_TOKEN='the-real-token')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('schedulers', res.data)
+        self.assertIn('disk', res.data)
+        self.assertIn('backup', res.data)
+
+
+class ReadinessViewErrorDetailTests(TestCase):
+    """Anonymous callers see `up: true/false`, never the raw exception text
+    (hostnames, ports, driver-specific error strings) — only a caller
+    presenting a valid MONITORING_TOKEN does. Forces Redis down via an
+    unroutable host/port so a real, deterministic error string exists to
+    check for, rather than relying on Redis happening to already be down.
+    """
+
+    def test_anonymous_caller_does_not_see_redis_error_detail(self):
+        with override_settings(
+            MONITORING_TOKEN='the-real-token',
+            REDIS_CONNECTION={'host': '127.0.0.1', 'port': 1, 'password': None, 'db': 0},
+        ):
+            res = self.client.get('/api/v1/health/ready/')
+        self.assertEqual(res.status_code, 503)
+        self.assertFalse(res.data['components']['redis']['up'])
+        self.assertNotIn('error', res.data['components']['redis'])
+
+    def test_authorized_caller_sees_redis_error_detail(self):
+        with override_settings(
+            MONITORING_TOKEN='the-real-token',
+            REDIS_CONNECTION={'host': '127.0.0.1', 'port': 1, 'password': None, 'db': 0},
+        ):
+            res = self.client.get('/api/v1/health/ready/', HTTP_X_MONITORING_TOKEN='the-real-token')
+        self.assertEqual(res.status_code, 503)
+        self.assertFalse(res.data['components']['redis']['up'])
+        self.assertIn('error', res.data['components']['redis'])

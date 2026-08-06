@@ -26,14 +26,21 @@ docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revisi
 echo
 
 BACKEND_PORT="${BACKEND_PORT:-8100}"
+STATUS_BODY_FILE="$(mktemp)"
 echo "=== Health endpoints (via 127.0.0.1:${BACKEND_PORT}, bypassing Nginx) ==="
 for path in health/live health/ready health/monitoring; do
-  code="$(curl -fsS -o /tmp/rastichat-status-body.json -w '%{http_code}' "http://127.0.0.1:${BACKEND_PORT}/api/v1/${path}/" 2>/dev/null || echo "ERR")"
+  # health/monitoring requires the same shared-secret header a real
+  # monitoring tool would send (see common.views.MonitoringView /
+  # MONITORING_TOKEN) — this operator-run script has the env file's value
+  # available, an anonymous caller does not.
+  code="$(curl -fsS -o "$STATUS_BODY_FILE" -w '%{http_code}' \
+    ${MONITORING_TOKEN:+-H "X-Monitoring-Token: ${MONITORING_TOKEN}"} \
+    "http://127.0.0.1:${BACKEND_PORT}/api/v1/${path}/" 2>/dev/null || echo "ERR")"
   echo "--- /api/v1/${path}/ -> ${code} ---"
-  cat /tmp/rastichat-status-body.json 2>/dev/null | (python3 -m json.tool 2>/dev/null || cat)
+  cat "$STATUS_BODY_FILE" 2>/dev/null | (python3 -m json.tool 2>/dev/null || cat)
   echo
 done
-rm -f /tmp/rastichat-status-body.json
+rm -f "$STATUS_BODY_FILE"
 
 BACKUP_DIR="${BACKUP_DIR:-/opt/rastichat/backups}"
 echo "=== Latest backup ==="

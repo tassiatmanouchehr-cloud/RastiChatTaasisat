@@ -3,7 +3,7 @@ import path from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import {
   BACKEND_URL, OPERATOR_URL, PLATFORM_URL, WIDGET_URL, WS_URL, PROJECT_KEY,
-  OWNER_EMAIL, OWNER_PASSWORD, OPERATOR_EMAIL, OPERATOR_PASSWORD,
+  OWNER_EMAIL, OWNER_PASSWORD, OPERATOR_EMAIL, OPERATOR_PASSWORD, MONITORING_TOKEN,
 } from './env';
 import { TINY_PNG_BASE64 } from '../tests/helpers';
 
@@ -286,6 +286,9 @@ test.describe('Staging smoke', () => {
   test('health endpoints report ready over HTTPS', async ({ request }) => {
     for (const path of ['health/live', 'health/ready', 'health/monitoring']) {
       const res = await request.get(`${BACKEND_URL}/api/v1/${path}/`);
+      // health/monitoring requires MONITORING_TOKEN (see
+      // common.views.MonitoringView) — an anonymous 401 here is expected
+      // and correct, not a failure; only a real 5xx is.
       expect(res.status(), `GET /api/v1/${path}/`).toBeLessThan(500);
     }
     const ready = await request.get(`${BACKEND_URL}/api/v1/health/ready/`);
@@ -293,5 +296,24 @@ test.describe('Staging smoke', () => {
     expect(body.status).toBe('ready');
     expect(body.components.database.up).toBe(true);
     expect(body.components.redis.up).toBe(true);
+  });
+
+  // Scenario 18b: monitoring endpoint auth — anonymous is rejected,
+  // token-bearing is accepted. Only runs the positive half if
+  // SMOKE_MONITORING_TOKEN was provided (optional — see env.ts).
+  test('health/monitoring requires the monitoring token', async ({ request }) => {
+    const anon = await request.get(`${BACKEND_URL}/api/v1/health/monitoring/`);
+    expect(anon.status()).toBe(401);
+
+    if (MONITORING_TOKEN) {
+      const authed = await request.get(`${BACKEND_URL}/api/v1/health/monitoring/`, {
+        headers: { 'X-Monitoring-Token': MONITORING_TOKEN },
+      });
+      expect(authed.status()).toBe(200);
+      const body = await authed.json();
+      expect(body).toHaveProperty('schedulers');
+      expect(body).toHaveProperty('disk');
+      expect(body).toHaveProperty('backup');
+    }
   });
 });

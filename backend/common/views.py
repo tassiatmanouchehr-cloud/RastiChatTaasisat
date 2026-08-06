@@ -1,3 +1,4 @@
+import hmac
 import os
 import shutil
 
@@ -10,6 +11,24 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.models import SchedulerHeartbeat
+
+
+def _is_authorized_monitor(request):
+    """Gates MonitoringView (always) and adds error detail to Readiness's
+    otherwise-public response (see ReadinessView) — a shared-secret header
+    rather than session/JWT auth, since the caller is typically an
+    infra-side monitoring tool, not a logged-in operator. `hmac.compare_digest`
+    avoids leaking the token's correct prefix length via response-time
+    differences. In development (no MONITORING_TOKEN configured —
+    settings.py requires one in staging/production) any caller is treated
+    as authorized, matching this project's existing dev-permissive
+    conventions (e.g. CORS_ALLOW_ALL_ORIGINS).
+    """
+    configured = settings.MONITORING_TOKEN
+    if not configured:
+        return True
+    supplied = request.headers.get('X-Monitoring-Token', '')
+    return hmac.compare_digest(supplied, configured)
 
 
 def _check_database():
@@ -71,6 +90,11 @@ class ReadinessView(APIView):
     backend) is unreachable, or when the schema doesn't match the code
     (unapplied migrations) — serving traffic in either state would fail
     requests or corrupt data, not just look nice on a dashboard.
+
+    Stays unauthenticated (Nginx/orchestrators poll this by design, with no
+    token) — but raw exception text (connection strings, hostnames, ports)
+    is only ever included for a caller presenting a valid monitoring token;
+    an anonymous caller only ever sees `up: true/false`, never *why*.
     """
     permission_classes = []
 
@@ -78,16 +102,20 @@ class ReadinessView(APIView):
         db_ok, db_error = _check_database()
         redis_ok, redis_error = _check_redis()
         migrations_ok, migrations_detail = _check_migrations()
+        show_detail = _is_authorized_monitor(request)
 
         ready = db_ok and redis_ok and migrations_ok
         body = {
             'status': 'ready' if ready else 'not_ready',
             'components': {
-                'database': {'up': db_ok, **({'error': db_error} if db_error else {})},
-                'redis': {'up': redis_ok, **({'error': redis_error} if redis_error else {})},
+                'database': {'up': db_ok, **({'error': db_error} if db_error and show_detail else {})},
+                'redis': {'up': redis_ok, **({'error': redis_error} if redis_error and show_detail else {})},
                 'migrations': {
                     'up_to_date': migrations_ok,
-                    **({'pending_count': migrations_detail} if migrations_ok else {'error': migrations_detail}),
+                    **(
+                        {'pending_count': migrations_detail} if migrations_ok
+                        else ({'error': migrations_detail} if show_detail else {})
+                    ),
                 },
             },
         }
@@ -157,10 +185,20 @@ class MonitoringView(APIView):
     that hasn't run recently shouldn't make the app start failing user
     requests, but it absolutely should be visible to whatever's polling
     this for alerting. See docs/runbooks/MONITORING_RUNBOOK.md.
+
+    Unlike Liveness/Readiness, this is never anonymous in staging/
+    production: disk usage, backup filenames/ages, and scheduler heartbeat
+    status are internal operational details, not something to hand to
+    every unauthenticated caller on the internet — requires the
+    X-Monitoring-Token header (settings.MONITORING_TOKEN). An unauthorized
+    request gets a bare 401 with no operational detail at all, not even
+    which check would have failed.
     """
     permission_classes = []
 
     def get(self, request):
+        if not _is_authorized_monitor(request):
+            return Response({'error': 'unauthorized'}, status=401)
         return Response({
             'schedulers': _scheduler_status(),
             'disk': _disk_usage(),

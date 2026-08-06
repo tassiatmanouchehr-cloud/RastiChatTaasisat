@@ -25,7 +25,9 @@ manual fallback/double-check for the rest).
 15. Internal note stays private.
 16. Cross-workspace/cross-project access rejected.
 17. Platform Dashboard loads.
-18. Health endpoints report ready.
+18. Health endpoints report ready (including that `/health/monitoring/`
+    correctly rejects an anonymous caller with 401 and, if
+    `SMOKE_MONITORING_TOKEN` is set, accepts one presenting it).
 
 **Result:** PASS / FAIL — attach the Playwright HTML report
 (`e2e/staging-smoke/smoke-report/`) from the run.
