@@ -15,8 +15,12 @@ RUN npm run build
 # CI passes the git short SHA (see .github/workflows/staging-deploy.yml).
 ARG WIDGET_VERSION=dev
 RUN mkdir -p /out/widget/${WIDGET_VERSION} \
+    /out/examples/customer-test \
     && cp dist/widget.iife.js /out/widget.js \
-    && cp dist/widget.iife.js /out/widget/${WIDGET_VERSION}/widget.js
+    && cp dist/widget.iife.js /out/widget/${WIDGET_VERSION}/widget.js \
+    && cp examples/customer-test/index.html /out/examples/customer-test/index.html \
+    && cp examples/customer-test/style.css /out/examples/customer-test/style.css \
+    && cp examples/customer-test/app.js /out/examples/customer-test/app.js
 
 FROM nginx:1.27-alpine AS runner
 COPY nginx.conf /etc/nginx/conf.d/default.conf
